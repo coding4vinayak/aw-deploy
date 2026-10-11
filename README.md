@@ -1,5 +1,8 @@
 # aw-deploy
 
+![CI](https://github.com/coding4vinayak/aw-deploy/actions/workflows/ci.yml/badge.svg)
+
+
 The Abetworks deploy tooling. Nothing else. This repo is the code that generates,
 verifies, load-tests, and pushes the rest of the family — not a product itself.
 

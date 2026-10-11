@@ -1,0 +1,15 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: node --check on every .mjs
+        run: find . -name '*.mjs' -not -path './node_modules/*' -exec node --check {} \;
+      - name: bash -n on every .sh
+        run: find . -name '*.sh' -not -path './node_modules/*' -exec bash -n {} \;

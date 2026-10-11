@@ -1,18 +1,24 @@
-# Deploying the Abetworks suite (hub + 35 tools)
+# Deploying the Abetworks suite
 
-## 1. Push to GitHub (once)
+Post-split, each app is its own independent repo (`aw-*` on `coding4vinayak`),
+and this repo holds the *how they get built and shipped*. Every script below
+takes a staging root via env vars — no hardcoded `/srv/work/...` paths.
+
+## 1. Push local clones to their own remotes
 ```bash
-export GITHUB_TOKEN=ghp_...     # token with repo scope
-export GH_ACCOUNT=yourorg       # user or org
-bash /srv/work/deploy/push-all.sh private   # or public
+# Each clone already has `origin` pointing at its GitHub repo.
+AW_STAGING_ROOT=~/aw-staging bash deploy/push-all.sh            # push
+AW_STAGING_ROOT=~/aw-staging bash deploy/push-all.sh --dry-run  # show what would push
 ```
-Creates + pushes 36 repos: `abetworks-hub`, `abet-<slug>` for each of the 35 tools.
+This does not create repos; the `aw-<app>` repos on GitHub already exist.
+`push-all.sh` skips any dir without `.git`, and skips `aw-deploy` itself.
 
-## 2. Render Blueprint (once, creates all 36 services)
-- Host `render.blueprint.yaml` publicly (e.g. in a gist or a repo), then
+## 2. Render Blueprint (once, creates the hub + 35 tool services)
+- Host `render.blueprint.yaml` publicly (gist or a repo), then
   Render → **New → Blueprint** → paste the raw URL.
-- When prompted, set shared env var `GH_ACCOUNT` = same GitHub account.
-- Free plan, region singapore, health checks on `/`. Each tool honors `$PORT` automatically.
+- When prompted, set shared env var `GH_ACCOUNT` = the GitHub account that owns
+  the standalone tool forks this blueprint deploys.
+- Free plan, region singapore, health checks on `/`. Each tool honors `$PORT`.
 
 ## 3. Domain + wildcard DNS
 In your DNS for `abetworks.in` add one record:
@@ -28,11 +34,17 @@ Every AI-wired tool works keyless via deterministic engines. To enable AI qualit
 - `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`, `OPENAI_MODEL`) for any OpenAI-compatible provider.
 
 ## 5. After any hub change
+The generator (`make_standalone_tools.mjs`) reads a hub clone and writes 35
+standalone forks to a sibling directory. Both paths are env-var overridable:
 ```bash
-node /srv/work/make_standalone_tools.mjs   # regenerate all 35 apps
-bash /srv/work/deploy/rebuild-all.sh       # build hub + all apps
-cd /srv/work/hub && git add -A && git commit -m ... && git push
-for d in /srv/work/products/*/; do (cd $d && git add -A && git commit -m ... && git push); done
+AW_HUB=~/aw-staging/abethub \
+AW_FORKS_OUT=~/aw-forks \
+  node make_standalone_tools.mjs
+
+AW_STAGING_ROOT=~/aw-staging bash deploy/rebuild-all.sh   # build every app with a build script
+
+# Commit + push the hub, then each fork directory that has its own remote.
+AW_STAGING_ROOT=~/aw-staging bash deploy/push-all.sh
 ```
 Render auto-deploys on push.
 

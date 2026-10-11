@@ -8,14 +8,19 @@
 //             field names that route actually reads, plus a negative test that
 //             empty input is rejected rather than crashing or inventing a result
 //
-// Run: node /srv/work/deploy/verify-standalone.mjs [slug ...]
+// Run: node deploy/verify-standalone.mjs [slug ...]
+//
+// Paths: AW_FORKS is the dir holding the 35 generated standalone forks; AW_HUB
+// is the hub clone whose `lib/registry.js` names them. Defaults preserve the
+// pre-split umbrella layout.
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 
-const P = '/srv/work/products';
+const P = process.env.AW_FORKS || '/srv/work/products';
+const HUB = process.env.AW_HUB || '/srv/work/hub';
 const BASE_PORT = 4401;
 const slugs = process.argv.slice(2);
-const registry = readFileSync('/srv/work/hub/lib/registry.js', 'utf8');
+const registry = readFileSync(`${HUB}/lib/registry.js`, 'utf8');
 const TOOLS = [...registry.matchAll(/\{ slug: '([a-z0-9]+)', name: '([^']*)', tier: '([a-z]+)'/g)]
   .map((m) => ({ slug: m[1], name: m[2], tier: m[3] }));
 const targets = (slugs.length ? TOOLS.filter((t) => slugs.includes(t.slug)) : TOOLS);

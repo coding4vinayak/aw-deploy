@@ -1,32 +1,45 @@
 #!/usr/bin/env bash
-# Push hub + all 35 standalone tools to GitHub (creates repos via API).
-# Usage: GITHUB_TOKEN=xxx GH_ACCOUNT=yourorg ./push-all.sh [private|public]
+# Push every independent Abetworks app repo from a local staging root.
+#
+# Each app now owns its own remote (the split retired the "abet-<slug>"
+# repo-name pattern the umbrella used). This script does not create
+# repos and does not reconstruct remote URLs — it only pushes each
+# discovered clone to whatever `origin` that clone already has.
+#
+# Usage:
+#   AW_STAGING_ROOT=~/aw-staging ./push-all.sh
+#   AW_STAGING_ROOT=~/aw-staging ./push-all.sh --dry-run
+#
+# The default root is /srv/work/staging. Set the env var to point
+# anywhere the clones live.
 set -euo pipefail
-: "${GITHUB_TOKEN:?export GITHUB_TOKEN with repo scope}"
-: "${GH_ACCOUNT:?export GH_ACCOUNT (your GitHub user or org)}"
-VIS="${1:-private}"
-API=https://api.github.com
 
-push_one() {
-  local dir="$1" name="$2"
-  cd "$dir"
-  git branch -M main 2>/dev/null || true
-  if ! curl -sf -H "authorization: Bearer $GITHUB_TOKEN" "$API/repos/$GH_ACCOUNT/$name" >/dev/null; then
-    echo "creating $name ($VIS)"
-    curl -sf -H "authorization: Bearer $GITHUB_TOKEN" \
-      -d "{\"name\":\"$name\",\"private\":$([ "$VIS" = private ] && echo true || echo false),\"has_issues\":false}" \
-      "$API/user/repos" >/dev/null
+ROOT="${AW_STAGING_ROOT:-/srv/work/staging}"
+DRY=""
+[ "${1:-}" = "--dry-run" ] && DRY=1
+
+[ -d "$ROOT" ] || { echo "AW_STAGING_ROOT=$ROOT does not exist" >&2; exit 2; }
+
+count=0
+for d in "$ROOT"/*/; do
+  [ -d "$d/.git" ] || continue
+  name=$(basename "$d")
+  origin=$(git -C "$d" remote get-url origin 2>/dev/null || true)
+  if [ -z "$origin" ]; then
+    echo "SKIP  $name — no origin"
+    continue
   fi
-  local url="https://x-access-token:$GITHUB_TOKEN@github.com/$GH_ACCOUNT/$name.git"
-  git remote remove origin 2>/dev/null || true
-  git remote add origin "$url"
-  git push -q -u origin main --force-with-lease || { echo "PUSH FAILED: $name"; return 1; }
-  echo "pushed $name"
-}
-
-push_one /srv/work/hub abetworks-hub
-for d in /srv/work/products/*/; do
-  slug=$(basename "$d")
-  push_one "$d" "abet-$slug"
+  if [ "$name" = "aw-deploy" ]; then
+    echo "SKIP  $name — this repo, not a product"
+    continue
+  fi
+  branch=$(git -C "$d" symbolic-ref --short -q HEAD || echo main)
+  if [ -n "$DRY" ]; then
+    echo "DRY   $name → $(sed 's#//[^@]*@#//#' <<<"$origin") ($branch)"
+  else
+    echo "PUSH  $name → $(sed 's#//[^@]*@#//#' <<<"$origin") ($branch)"
+    git -C "$d" push -q origin "HEAD:$branch"
+  fi
+  count=$((count + 1))
 done
-echo "done: 36 repos under $GH_ACCOUNT"
+echo "handled $count repos under $ROOT"

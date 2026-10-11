@@ -7,12 +7,16 @@
 // One difference is intentional and whitelisted: ToolShell.jsx's back link
 // points at "/" inside the hub and at the suite site in a standalone deploy.
 //
-// Run: node /srv/work/deploy/check-parity.mjs
+// Run: node deploy/check-parity.mjs
+//
+// Paths: after the split each app is its own clone; override AW_HUB and
+// AW_FORKS to point at wherever your hub and generated forks actually live.
+// Defaults preserve the pre-split layout.
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-const HUB = '/srv/work/hub';
-const P = '/srv/work/products';
+const HUB = process.env.AW_HUB || '/srv/work/hub';
+const P = process.env.AW_FORKS || '/srv/work/products';
 const hash = (s) => createHash('sha256').update(s).digest('hex').slice(0, 12);
 const read = (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null);
 

@@ -31,7 +31,10 @@ import { spawn, execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import http from "node:http";
 
-const ROOT = "/srv/work/products";
+// Products root: after the split each app is its own clone. Set AW_STAGING_ROOT
+// to point at the directory holding those clones. Default preserves the
+// pre-split umbrella path.
+const ROOT = process.env.AW_STAGING_ROOT || "/srv/work/products";
 const LEVELS = (process.env.LEVELS || "1,10,50").split(",").map(Number);
 const SECONDS = Number(process.env.SECONDS || 5);
 

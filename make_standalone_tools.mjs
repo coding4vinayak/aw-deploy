@@ -1,8 +1,12 @@
 import { readFileSync, writeFileSync, mkdirSync, cpSync, existsSync, readdirSync } from 'fs';
 import { execSync } from 'child_process';
 
-const HUB = '/srv/work/hub';
-const OUT = '/srv/work/products';
+// The hub and the standalone-fork output dir are configurable because, after
+// the split, every app is its own repo and operators keep clones wherever
+// they like. Defaults preserve the pre-split layout so existing notes still
+// apply. Override with AW_HUB and AW_FORKS_OUT.
+const HUB = process.env.AW_HUB || '/srv/work/hub';
+const OUT = process.env.AW_FORKS_OUT || '/srv/work/products';
 
 // Load the hub registry (plain ESM-style source, eval it).
 const regSrc = readFileSync(`${HUB}/lib/registry.js`, 'utf8').replace(/export\s+/g, '');

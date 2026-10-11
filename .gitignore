@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+*.log
+nohup.out
+.env
+.env.*
+
+# products/ + hub/ + abetpdf/ are their own repos now; nothing here reaches into them
+/products/
+/hub/
+/abetpdf/

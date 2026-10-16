@@ -36,6 +36,9 @@
 #      legacy InfinityFree host — see fix pack §F1.
 #
 # Notes
+#   * Every app ships a deep `/api/health` (DB ping → 503 when down; Redis is
+#     reported best-effort) — that route is the healthCheckPath here, so a
+#     deploy whose migrations failed never takes traffic.
 #   * Services are matched by `name` — if you already created one by hand with
 #     the same name, Render updates it in place instead of duplicating it.
 #   * Preview environments are OFF (this fleet is billed per service; worker
@@ -120,7 +123,7 @@ services:
     runtime: node
     plan: starter
     region: singapore
-    healthCheckPath: /
+    healthCheckPath: /api/health
     buildCommand: npm ci && npx prisma generate && npm run build
     startCommand: npx prisma migrate deploy && npm run start
     domains:
@@ -174,7 +177,7 @@ services:
     runtime: node
     plan: starter
     region: singapore
-    healthCheckPath: /
+    healthCheckPath: /api/health
     buildCommand: npm ci && npx prisma generate && npm run build
     startCommand: npx prisma migrate deploy && npm run start
     domains:
@@ -223,7 +226,7 @@ services:
     runtime: node
     plan: starter
     region: singapore
-    healthCheckPath: /
+    healthCheckPath: /api/health
     buildCommand: npm ci && npx prisma generate && npm run build
     startCommand: npx prisma migrate deploy && npm run start
     domains:
@@ -269,7 +272,7 @@ services:
     runtime: node
     plan: starter
     region: singapore
-    healthCheckPath: /
+    healthCheckPath: /api/health
     buildCommand: npm ci && npx prisma generate && npm run build
     startCommand: npx prisma migrate deploy && npm run start
     domains:
@@ -321,7 +324,7 @@ services:
     runtime: node
     plan: starter
     region: singapore
-    healthCheckPath: /
+    healthCheckPath: /api/health
     buildCommand: npm ci && npx prisma generate && npm run build
     startCommand: npx prisma migrate deploy && npm run start
     domains:
@@ -372,7 +375,7 @@ services:
     runtime: node
     plan: starter
     region: singapore
-    healthCheckPath: /
+    healthCheckPath: /api/health
     buildCommand: npm ci && npx prisma generate && npm run build
     startCommand: npx prisma migrate deploy && npm run start
     domains:
@@ -413,7 +416,7 @@ services:
     runtime: node
     plan: starter
     region: singapore
-    healthCheckPath: /
+    healthCheckPath: /api/health
     buildCommand: npm ci && npx prisma generate && npm run build
     startCommand: npx prisma migrate deploy && npm run start
     domains:
@@ -429,3 +432,19 @@ services:
         fromDatabase:
           name: aw-abetapi-db
           property: connectionString
+      # Email (Resend) + reply webhook — optional until email features are used
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_WEBHOOK_URL
+        sync: false
+      - key: EMAIL_WEBHOOK_TOKEN
+        sync: false
+      # LLM — optional, AI features only
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false

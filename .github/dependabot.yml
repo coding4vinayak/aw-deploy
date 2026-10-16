@@ -1,12 +1,8 @@
 version: 2
 updates:
-  - package-ecosystem: npm
-    directory: "/"
-    schedule: { interval: weekly, day: monday }
-    open-pull-requests-limit: 5
-    groups:
-      minor-and-patch:
-        update-types: [minor, patch]
+  # No npm entry on purpose: this repo carries no package.json — the .mjs
+  # scripts run on Node built-ins only — and the npm updater was failing
+  # every scheduled run on the missing manifest.
   - package-ecosystem: github-actions
     directory: "/"
     schedule: { interval: weekly, day: monday }

@@ -1,472 +1,61 @@
-# Render Blueprint — Abetworks Hub + all 35 standalone tools (36 services).
-# Host render.blueprint.yaml somewhere public (or paste in Render dashboard) and import it.
-# Render will ask once for GH_ACCOUNT (GitHub user/org holding the repos).
+###############################################################################
+# Render Blueprint — Abetworks Hub, live at hub.abetworks.in  (16 Oct 2026)
+#
+# WHAT THIS REPLACES — an audit of the previous version of this file (which
+# described 36 services: "hub + 35 standalone tool repos" like abet-siteread,
+# abet-apihealth, …, abetworks-hub) found that NONE of those 36 repos exist on
+# GitHub, and Render does not substitute `${GH_ACCOUNT}`-style variables in
+# `repo:` fields — so that blueprint could never import.
+#
+# WHAT ACTUALLY EXISTS — `aw-abethub`: ONE Next.js app that carries all 35
+# tools as independent routes (`/answerready`, `/api/answerready`, `/coldopener`,
+# …). Its own README: "One deployable Next.js app; every tool route is
+# independent." This blueprint provisions exactly that.
+#
+# COST — `starter` ≈ $7/mo + 1 GB disk ≈ $0.25/mo. Starter, not free, because:
+#   * free instances sleep after ~15 min idle (cold starts for visitors), and
+#   * free instances cannot attach a persistent disk — and the hub appends
+#     every captured lead to /data/leads.json. Disk-less means leads vanish on
+#     the next deploy. Leads are the point; $7/mo is the cheapest way to keep
+#     them. (If you ever want $0 instead, drop `disk:` too — accept lead loss.)
+#
+# IMPORT — Render → New → Blueprint → repo `aw-deploy` → this file.
+# `aw-abethub` also carries its own equivalent render.yaml; either path
+# creates the same `abetworks-hub` service.
+#
+# WANT THE STANDALONE-PER-SUBDOMAIN TOPOLOGY BACK? Create those repos first,
+# then add one service per repo with a literal `repo: https://github.com/...`
+# URL. Never reintroduce ${...} placeholders — Render treats them as literal
+# text in this file.
+###############################################################################
+
+previews:
+  generation: "off"
+
 services:
   - type: web
     name: abetworks-hub
-    repo: https://github.com/${GH_ACCOUNT}/abetworks-hub
+    repo: https://github.com/coding4vinayak/aw-abethub
     branch: main
     runtime: node
-    plan: free
+    plan: starter
     region: singapore
+    healthCheckPath: /
     buildCommand: npm ci && npm run build
     startCommand: npm run start
-    healthCheckPath: /
+    domains:
+      - hub.abetworks.in
+    disk: # current spec shape: singular `disk` + `mountPath` (not `disks`/`path`)
+      name: hub-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: "22"
-  - type: web
-    name: abet-siteread
-    repo: https://github.com/${GH_ACCOUNT}/abet-siteread
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-emailhealth
-    repo: https://github.com/${GH_ACCOUNT}/abet-emailhealth
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-coldopener
-    repo: https://github.com/${GH_ACCOUNT}/abet-coldopener
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-churnpeek
-    repo: https://github.com/${GH_ACCOUNT}/abet-churnpeek
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-taglinely
-    repo: https://github.com/${GH_ACCOUNT}/abet-taglinely
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-answerready
-    repo: https://github.com/${GH_ACCOUNT}/abet-answerready
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-apihealth
-    repo: https://github.com/${GH_ACCOUNT}/abet-apihealth
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-brandvoice
-    repo: https://github.com/${GH_ACCOUNT}/abet-brandvoice
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-cancelsave
-    repo: https://github.com/${GH_ACCOUNT}/abet-cancelsave
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-churnsignal
-    repo: https://github.com/${GH_ACCOUNT}/abet-churnsignal
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-coldangle
-    repo: https://github.com/${GH_ACCOUNT}/abet-coldangle
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-consentscan
-    repo: https://github.com/${GH_ACCOUNT}/abet-consentscan
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-contractscan
-    repo: https://github.com/${GH_ACCOUNT}/abet-contractscan
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-datasweep
-    repo: https://github.com/${GH_ACCOUNT}/abet-datasweep
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-dealbrief
-    repo: https://github.com/${GH_ACCOUNT}/abet-dealbrief
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-emailaudit
-    repo: https://github.com/${GH_ACCOUNT}/abet-emailaudit
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-featurevote
-    repo: https://github.com/${GH_ACCOUNT}/abet-featurevote
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-feedbackloop
-    repo: https://github.com/${GH_ACCOUNT}/abet-feedbackloop
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-hiresignal
-    repo: https://github.com/${GH_ACCOUNT}/abet-hiresignal
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-invoiceparse
-    repo: https://github.com/${GH_ACCOUNT}/abet-invoiceparse
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-meetingprep
-    repo: https://github.com/${GH_ACCOUNT}/abet-meetingprep
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-onboardflow
-    repo: https://github.com/${GH_ACCOUNT}/abet-onboardflow
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-pingdeck
-    repo: https://github.com/${GH_ACCOUNT}/abet-pingdeck
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-pitchdeck
-    repo: https://github.com/${GH_ACCOUNT}/abet-pitchdeck
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-pricepulse
-    repo: https://github.com/${GH_ACCOUNT}/abet-pricepulse
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-promptshield
-    repo: https://github.com/${GH_ACCOUNT}/abet-promptshield
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-quotecraft
-    repo: https://github.com/${GH_ACCOUNT}/abet-quotecraft
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-repurpose10
-    repo: https://github.com/${GH_ACCOUNT}/abet-repurpose10
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-reviewreply
-    repo: https://github.com/${GH_ACCOUNT}/abet-reviewreply
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-scopelock
-    repo: https://github.com/${GH_ACCOUNT}/abet-scopelock
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-sloganforge
-    repo: https://github.com/${GH_ACCOUNT}/abet-sloganforge
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-socialproof
-    repo: https://github.com/${GH_ACCOUNT}/abet-socialproof
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-supportqa
-    repo: https://github.com/${GH_ACCOUNT}/abet-supportqa
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-taxready
-    repo: https://github.com/${GH_ACCOUNT}/abet-taxready
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
-  - type: web
-    name: abet-winloss
-    repo: https://github.com/${GH_ACCOUNT}/abet-winloss
-    branch: main
-    runtime: node
-    plan: free
-    region: singapore
-    buildCommand: npm ci && npm run build
-    startCommand: npm run start
-    healthCheckPath: /
-    envVars:
-      - key: NODE_VERSION
-        value: "22"
+      # Optional AI quality upgrade for the compose-style tools (coldopener,
+      # coldangle, answerready, emailaudit, meetingprep). Leave blank to keep
+      # the deterministic engines.
+      - key: ABET_API_KEY
+        sync: false
+      - key: ABET_API_BASE
+        sync: false

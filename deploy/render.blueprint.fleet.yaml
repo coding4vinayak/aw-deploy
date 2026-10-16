@@ -1,0 +1,431 @@
+###############################################################################
+# Abetworks — one-click fleet deploy blueprint
+#
+# What this provisions in ONE import (Render → New → Blueprint):
+#   7 web services  (aw-abetanalytics, aw-abetagent, aw-abetflow,
+#                    aw-leadgenius, aw-leadworks, aw-abetConnect, aw-abetapi)
+#   7 Render Postgres instances   (one per app, wired via DATABASE_URL)
+#   5 Render Key Value instances  (queues for the five BullMQ apps, REDIS_URL)
+#   Custom domains pre-declared  (analytics.abetworks.in, api.abetworks.in, ...)
+#
+# Everything between services is wired automatically (fromDatabase / fromService).
+# You only fill in third-party secrets when the Dashboard prompts (sync: false).
+#
+# ── COST, honestly ───────────────────────────────────────────────────────────
+#   Production profile (default below, no nasty surprises):
+#     7 × web `starter`        ≈ $7/mo  each   → ≈ $49/mo
+#     7 × Postgres `0.1c-256mb`  $6/mo  each   → ≈ $42/mo
+#     5 × Key Value `free`       $0 (25 MB, no disk persistence)
+#     Total ≈ $91/month, no sleeping, DBs never expire.
+#
+#   Trial profile ($0 — for a quick look before committing spend):
+#     change every web `plan: starter`           → `plan: free`   (sleeps after 15 min idle)
+#     change every DB  `plan: 0.1c-256mb`        → `plan: free`   (256 MB, EXPIRES AFTER 30 DAYS)
+#     Key Value already free.
+#
+# ── HOW TO IMPORT ────────────────────────────────────────────────────────────
+#   1. Render Dashboard → New → Blueprint
+#   2. Connect the repo that hosts this file (aw-deploy), set the blueprint
+#      path to wherever this file lives (default render.yaml; custom path allowed).
+#   3. Render asks for the `sync: false` values — every one is a third-party
+#      secret (Stripe / Resend / LLM). Leave any blank to launch without that
+#      feature; the app still boots and sells the rest.
+#   4. First deploy runs `prisma migrate deploy` itself — tables create themselves.
+#   5. DNS (Cloudflare): point each custom domain's CNAME at its onrender.com
+#      host, then purge cache. The old wildcard record currently aims at the
+#      legacy InfinityFree host — see fix pack §F1.
+#
+# Notes
+#   * Services are matched by `name` — if you already created one by hand with
+#     the same name, Render updates it in place instead of duplicating it.
+#   * Preview environments are OFF (this fleet is billed per service; worker
+#     PRs should not spawn 7 prod copies). Flip on per-service later if wanted.
+#   * autoDeploy defaults to on-commit for every service: merged main = deployed.
+#   * Postgres `16` matches the version every migration was verified against.
+#     `ipAllowList` is left at its default (public requires credentials) so you
+#     can inspect DBs from the Render dashboard; tighten later if you like.
+#   * Key Value instances are internal-only (`ipAllowList: []`) — that is all
+#     the queues need.
+###############################################################################
+
+previews:
+  generation: "off"
+
+databases:
+  - name: aw-abetanalytics-db
+    plan: 0.1c-256mb
+    region: singapore
+    postgresMajorVersion: "16"
+  - name: aw-abetagent-db
+    plan: 0.1c-256mb
+    region: singapore
+    postgresMajorVersion: "16"
+  - name: aw-abetflow-db
+    plan: 0.1c-256mb
+    region: singapore
+    postgresMajorVersion: "16"
+  - name: aw-leadgenius-db
+    plan: 0.1c-256mb
+    region: singapore
+    postgresMajorVersion: "16"
+  - name: aw-leadworks-db
+    plan: 0.1c-256mb
+    region: singapore
+    postgresMajorVersion: "16"
+  - name: aw-abetConnect-db
+    plan: 0.1c-256mb
+    region: singapore
+    postgresMajorVersion: "16"
+  - name: aw-abetapi-db
+    plan: 0.1c-256mb
+    region: singapore
+    postgresMajorVersion: "16"
+
+services:
+  # ── Queue brokers (BullMQ) ────────────────────────────────────────────────
+  - type: keyvalue
+    name: aw-abetanalytics-kv
+    plan: free
+    region: singapore
+    ipAllowList: [] # internal connections only
+  - type: keyvalue
+    name: aw-abetagent-kv
+    plan: free
+    region: singapore
+    ipAllowList: []
+  - type: keyvalue
+    name: aw-abetflow-kv
+    plan: free
+    region: singapore
+    ipAllowList: []
+  - type: keyvalue
+    name: aw-leadgenius-kv
+    plan: free
+    region: singapore
+    ipAllowList: []
+  - type: keyvalue
+    name: aw-leadworks-kv
+    plan: free
+    region: singapore
+    ipAllowList: []
+
+  # ── Revenue apps ──────────────────────────────────────────────────────────
+  # Every service: DATABASE_URL comes from its Postgres, REDIS_URL (where used)
+  # from its Key Value, domains pre-declared, migrate-deploy on boot.
+
+  - type: web
+    name: aw-abetanalytics
+    repo: https://github.com/coding4vinayak/aw-abetanalytics
+    branch: main
+    runtime: node
+    plan: starter
+    region: singapore
+    healthCheckPath: /
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npx prisma migrate deploy && npm run start
+    domains:
+      - analytics.abetworks.in
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PRODUCT_NAME
+        value: "abetanalytics"
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://analytics.abetworks.in
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aw-abetanalytics-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: aw-abetanalytics-kv
+          property: connectionString
+      # Billing (Stripe) — paste your live keys/price IDs; blank = billing disabled
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_FLAT_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_FLAT_ANNUAL
+        sync: false
+      # Email (Resend) + reply webhook — optional until email features are used
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_WEBHOOK_URL
+        sync: false
+      - key: EMAIL_WEBHOOK_TOKEN
+        sync: false
+      # LLM — optional, AI features only
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+
+  - type: web
+    name: aw-abetagent
+    repo: https://github.com/coding4vinayak/aw-abetagent
+    branch: main
+    runtime: node
+    plan: starter
+    region: singapore
+    healthCheckPath: /
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npx prisma migrate deploy && npm run start
+    domains:
+      - abetagent.abetworks.in
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PRODUCT_NAME
+        value: "abetagent"
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://abetagent.abetworks.in
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aw-abetagent-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: aw-abetagent-kv
+          property: connectionString
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_FLAT_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_FLAT_ANNUAL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_WEBHOOK_URL
+        sync: false
+      - key: EMAIL_WEBHOOK_TOKEN
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+
+  - type: web
+    name: aw-abetflow
+    repo: https://github.com/coding4vinayak/aw-abetflow
+    branch: main
+    runtime: node
+    plan: starter
+    region: singapore
+    healthCheckPath: /
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npx prisma migrate deploy && npm run start
+    domains:
+      - flow.abetworks.in
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PRODUCT_NAME
+        value: "abetflow"
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://flow.abetworks.in
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aw-abetflow-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: aw-abetflow-kv
+          property: connectionString
+      # Encrypts stored credentials — Render generates a strong value for you
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_WEBHOOK_URL
+        sync: false
+      - key: EMAIL_WEBHOOK_TOKEN
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+
+  - type: web
+    name: aw-leadgenius
+    repo: https://github.com/coding4vinayak/aw-leadgenius
+    branch: main
+    runtime: node
+    plan: starter
+    region: singapore
+    healthCheckPath: /
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npx prisma migrate deploy && npm run start
+    domains:
+      - leadgenius.abetworks.in
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://leadgenius.abetworks.in
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aw-leadgenius-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: aw-leadgenius-kv
+          property: connectionString
+      # Signs inbound webhooks — Render generates a strong value for you
+      - key: INBOUND_WEBHOOK_SIGNING_SECRET
+        generateValue: true
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_USER_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_USER_ANNUAL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_WEBHOOK_URL
+        sync: false
+      - key: EMAIL_WEBHOOK_TOKEN
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+
+  - type: web
+    name: aw-leadworks
+    repo: https://github.com/coding4vinayak/aw-leadworks
+    branch: main
+    runtime: node
+    plan: starter
+    region: singapore
+    healthCheckPath: /
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npx prisma migrate deploy && npm run start
+    domains:
+      - leadworks.abetworks.in
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PRODUCT_NAME
+        value: "leadworks"
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://leadworks.abetworks.in
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aw-leadworks-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: aw-leadworks-kv
+          property: connectionString
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_FLAT_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_FLAT_ANNUAL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_WEBHOOK_URL
+        sync: false
+      - key: EMAIL_WEBHOOK_TOKEN
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+
+  - type: web
+    name: aw-abetConnect
+    repo: https://github.com/coding4vinayak/aw-abetConnect
+    branch: main
+    runtime: node
+    plan: starter
+    region: singapore
+    healthCheckPath: /
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npx prisma migrate deploy && npm run start
+    domains:
+      - connect.abetworks.in
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PRODUCT_NAME
+        value: "abetConnect"
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://connect.abetworks.in
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aw-abetConnect-db
+          property: connectionString
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_SEAT_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_SEAT_ANNUAL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      # Password for the first admin account the seed creates
+      - key: SEED_PASSWORD
+        sync: false
+
+  - type: web
+    name: aw-abetapi
+    repo: https://github.com/coding4vinayak/aw-abetapi
+    branch: main
+    runtime: node
+    plan: starter
+    region: singapore
+    healthCheckPath: /
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npx prisma migrate deploy && npm run start
+    domains:
+      - api.abetworks.in
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PRODUCT_NAME
+        value: "abetapi"
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://api.abetworks.in
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aw-abetapi-db
+          property: connectionString

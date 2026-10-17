@@ -29,9 +29,10 @@ verification scripts. Not a product itself.
   (`leadgenius`), the two-app chain where only HOT leads leave the inbox
   and land in a workflow (`chain`), the admissions workflow that branches
   on the lead's tag and writes the decision back into the lead list
-  (`admissions`), and the clinic workflow that wakes on a fired analytics
-  rule (`clinic`). See `demo/README.md`; numbers match
-  `~/aw-simulation-report.md`.
+  (`admissions`), the clinic workflow that wakes on a fired analytics
+  rule (`clinic`), and the support agent that cites its handbook or escalates
+  to a human for real, with signed run events (`agent`). See `demo/README.md`;
+  numbers match `~/aw-simulation-report.md`.
 - `deploy/load-test.mjs` — the six-app load harness (50–200 requests,
   concurrency 10–50) that produced §8.1's numbers in `aw-abetworks-history`.
 - `deploy/push-all.sh`, `deploy/rebuild-all.sh` — operator loops for working

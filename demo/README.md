@@ -1,6 +1,6 @@
 # Abetworks demos — one command per demo
 
-Eight demos that show what the products do, run against the **real apps** on
+Nine demos that show what the products do, run against the **real apps** on
 this machine: production boot, real Postgres + Redis, real queue workers, real
 signed webhook deliveries — verified in-process, not staged.
 
@@ -13,6 +13,7 @@ demo/run-demo.sh leadgenius  # outbound: intro + guarded follow-up, reply/bounce
 demo/run-demo.sh chain       # Connect triage → Flow workflow: only HOT leads leave the inbox
 demo/run-demo.sh admissions  # LeadWorks intake → Flow branches + writes the decision back
 demo/run-demo.sh clinic      # Analytics rule fires → Flow wakes the front desk
+demo/run-demo.sh agent       # the agent that cites, or escalates — signed run events
 ```
 
 ## What each demo proves
@@ -27,11 +28,12 @@ demo/run-demo.sh clinic      # Analytics rule fires → Flow wakes the front des
 | `chain` | A law firm's intake desk, two products wired together | five enquiries ingested over the Connect API (WEBFORM + EMAIL): the founder's urgent summons scores **HOT (70+)** while the other four stay below and never leave the inbox; Connect pushes its signed `thread.hot` into a Flow trigger (`?key=` in the URL), exactly one workflow run **COMPLETED**, the templated alert names the lead and its score; Connect's and Flow's deliveries **signature VERIFIED** offline over raw bytes; spoofed trigger call **401**; still one run / one alert / one delivery after settling |
 | `admissions` | A training institute's admissions desk, branching + write-back | five enquiries into LeadWorks (one duplicate **409**, no event); four `lead.created` deliveries (all **signature VERIFIED**, body-only HMAC, no timestamp header) start four Flow runs; the tag decides the lane — two **priority** runs alert the counsellor *and* `PATCH` the lead to **QUALIFIED** in LeadWorks (read back), two take the **standard** brochure lane; alerts carry the exact event ids LeadWorks sent; `execution.completed` **signatures VERIFIED**; 8 deliveries, nothing else; re-runnable and self-cleaning (leads removed) |
 | `clinic` | A clinic's front desk hears about the slow week | a week of appointment events into AbetAnalytics: the frozen cancellation number is **7** and its `> 5` rule **fires** while the healthy bookings rule stays silent; the signed rule fire and the `alert.triggered` subscription copy both **VERIFIED offline**, and the subscription copy that reached Flow carries the **same event id the run consumed**; one run **COMPLETED**, alert names the 7; `lastFiredAt` recorded in the product; no stray execution from earlier workflows; still one run / one alert after settling; self-cleaning (its workflow and subscriptions are removed — the run is the artifact) |
+| `agent` | A support desk's agent over its own handbook | four real customer messages: the refund question answers with a citation to **Refunds** that matches the product's own search top hit; the SLA question the handbook cannot answer ends **ESCALATED** with a `no-confidence` step and fires `run.escalated` — a real handoff, with the refusal text preserved; "connect me to a human" / "cancel my …" escalate by **guardrail before any retrieval step**; five runs → five signed deliveries, every signature **VERIFIED offline under both spellings**, the escalation payload carrying the run's own refusal; a PAUSED agent refuses runs **409**, PATCH activates it, DELETE cascades its runs (no probe state left); re-seeded every run (`db:seed`), self-cleaning (its subscription is deleted) |
 
 ## Prerequisites (once per machine)
 
 - Node 22, local **Postgres** and **Redis** running
-- Sibling checkouts of the apps (default `~/repos/aw-{leadworks,abetanalytics,abetflow,abetConnect}`;
+- Sibling checkouts of the apps (default `~/repos/aw-{leadworks,abetanalytics,abetflow,abetConnect,abetagent}`;
   override the root with `AW_REPOS_DIR`)
 - Each app configured + migrated once:
 
@@ -48,7 +50,9 @@ demo/run-demo.sh clinic      # Analytics rule fires → Flow wakes the front des
   be pasted anywhere. The `chain` demo also boots **aw-abetConnect**, which has
   no `seed:key` script — the runner re-seeds it and reads the one-time key out
   of the seed output instead. The `admissions` and `clinic` demos also boot
-  **aw-abetflow** and mint its key the usual way.
+  **aw-abetflow** and mint its key the usual way. The `agent` demo re-runs
+  `npm run db:seed` first (idempotent), so the Support Agent and its Support
+  handbook always exist before the story starts.
 
 ## Knobs
 
@@ -61,7 +65,8 @@ demo/run-demo.sh clinic      # Analytics rule fires → Flow wakes the front des
 Ports: leadworks `3300`, analytics `3600`, flow `3500`, leadgenius `3200`;
 `chain` runs Flow on `3500` **and** Connect on `3400`; `admissions` runs
 LeadWorks on `3300` **and** Flow on `3500`; `clinic` runs Analytics on `3600`
-**and** Flow on `3500`. The
+**and** Flow on `3500`; `agent` runs AbetAgent on `3400` (its own default — the
+same port `chain` uses for Connect, never at the same time). The
 runner starts the app, waits for `/api/health`, runs the demo, and kills the app
 **by port PID** (`ss -ltnp`) on exit — a hung demo never leaves a service behind
 (the leadgenius run kills its SMTP sink the same way; the chain, admissions and

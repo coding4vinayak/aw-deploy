@@ -11,6 +11,7 @@
 #   demo/run-demo.sh chain       # Connect triage → Flow workflow: only HOT leads leave the inbox
 #   demo/run-demo.sh admissions  # LeadWorks intake → Flow branches + writes the decision back
 #   demo/run-demo.sh clinic      # Analytics rule fires → Flow wakes the front desk
+#   demo/run-demo.sh agent       # the agent that cites, or escalates — signed run events
 #
 # Env: AW_REPOS_DIR (default ~/repos) · HOOK_PORT (default 3799) · SINK_PORT (default 2525, leadgenius only)
 #
@@ -19,10 +20,11 @@
 # See demo/README.md. The leadgenius demo also needs `psql` on PATH and the
 # app's `INBOUND_WEBHOOK_SIGNING_SECRET` (defaulted here for local runs). The
 # chain, admissions and clinic demos boot TWO apps each; chain reads Connect's
-# one-time API key straight out of its seed output.
+# one-time API key straight out of its seed output. The agent demo re-seeds its
+# app (`db:seed`) before booting so the seeded Support Agent always exists.
 set -euo pipefail
 
-NAME="${1:?usage: run-demo.sh <leadworks|analytics|flow|connect>}"
+NAME="${1:?usage: run-demo.sh <leadworks|analytics|flow|connect|leadgenius|chain|admissions|clinic|agent>}"
 REPOS_DIR="${AW_REPOS_DIR:-$HOME/repos}"
 DEMO_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOK_PORT="${HOOK_PORT:-3799}"
@@ -49,6 +51,7 @@ case "$NAME" in
   chain)      APP=aw-abetflow;      PORT=3500; SCRIPT=demo-chain-intake.mjs; CONNECT_PORT=3400 ;;
   admissions) APP=aw-leadworks;     PORT=3300; SCRIPT=demo-admissions.mjs; FLOW_PORT=3500 ;;
   clinic)     APP=aw-abetanalytics; PORT=3600; SCRIPT=demo-clinic.mjs;     FLOW_PORT=3500 ;;
+  agent)      APP=aw-abetagent;     PORT=3400; SCRIPT=demo-agent.mjs ;;
   *) echo "unknown demo: $NAME (leadworks|analytics|flow|connect|leadgenius|chain|admissions|clinic)" >&2; exit 2 ;;
 esac
 
@@ -93,6 +96,17 @@ if [ "$NAME" = "admissions" ] || [ "$NAME" = "clinic" ]; then
     exit 1
   fi
   (cd "$REPOS_DIR/aw-abetflow" && ABET_ALLOW_PRIVATE_TARGETS=1 PORT=$FLOW_PORT nohup npm run start > "$DEMO_DIR/.run-$NAME-flow.log" 2>&1 &)
+fi
+
+if [ "$NAME" = "agent" ]; then
+  # The story is the state `npm run db:seed` installs — the Support Agent and
+  # its Support handbook. Re-running it is idempotent and prints the ids.
+  AGENT_SEED_LOG="$(cd "$REPOS_DIR/aw-abetagent" && npm run db:seed 2>&1)" || {
+    echo "agent seed failed (npm run db:seed in aw-abetagent) — tail:" >&2
+    printf '%s\n' "$AGENT_SEED_LOG" | tail -15 >&2
+    exit 1
+  }
+  printf '%s\n' "$AGENT_SEED_LOG" | grep -E "^(Knowledge base|Agent):|^Seed run:" | sed 's/^/  /' || true
 fi
 
 echo "── demo: $NAME  (app=$APP, port=$PORT, capture=:$HOOK_PORT) ──"

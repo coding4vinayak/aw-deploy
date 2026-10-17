@@ -4,6 +4,11 @@ Everything here maps to something **runnable** (`demo/`, `deploy/acceptance/`)
 or **checkable in the product** — no claim the software cannot back up on the
 call. Keep it that way.
 
+**Opening a call, or printing something to hold?** [`one-pager.html`](one-pager.html)
+is the at-a-glance version of this kit — the five apps with their buyer sentence
+and 30-second proof, the three cross-product stories, the $0 half, and what to
+send when. Open it in a browser or print it to PDF (print styles included).
+
 ## What is sold
 
 Five apps, sold **standalone** and **self-serve**: pricing page → 14-day free

@@ -10,6 +10,7 @@
 #   demo/run-demo.sh leadgenius  # outbound sequence: intro + guarded follow-up, bounce/reply stop it
 #   demo/run-demo.sh chain       # Connect triage → Flow workflow: only HOT leads leave the inbox
 #   demo/run-demo.sh admissions  # LeadWorks intake → Flow branches + writes the decision back
+#   demo/run-demo.sh clinic      # Analytics rule fires → Flow wakes the front desk
 #
 # Env: AW_REPOS_DIR (default ~/repos) · HOOK_PORT (default 3799) · SINK_PORT (default 2525, leadgenius only)
 #
@@ -17,8 +18,8 @@
 # pointing at its local database, and `npm run db:deploy` + seed where it exists.
 # See demo/README.md. The leadgenius demo also needs `psql` on PATH and the
 # app's `INBOUND_WEBHOOK_SIGNING_SECRET` (defaulted here for local runs). The
-# chain and admissions demos boot TWO apps each; chain reads Connect's one-time
-# API key straight out of its seed output.
+# chain, admissions and clinic demos boot TWO apps each; chain reads Connect's
+# one-time API key straight out of its seed output.
 set -euo pipefail
 
 NAME="${1:?usage: run-demo.sh <leadworks|analytics|flow|connect>}"
@@ -47,7 +48,8 @@ case "$NAME" in
   leadgenius) APP=aw-leadgenius;    PORT=3200; SCRIPT=demo-leadgenius.mjs ;;
   chain)      APP=aw-abetflow;      PORT=3500; SCRIPT=demo-chain-intake.mjs; CONNECT_PORT=3400 ;;
   admissions) APP=aw-leadworks;     PORT=3300; SCRIPT=demo-admissions.mjs; FLOW_PORT=3500 ;;
-  *) echo "unknown demo: $NAME (leadworks|analytics|flow|connect|leadgenius|chain|admissions)" >&2; exit 2 ;;
+  clinic)     APP=aw-abetanalytics; PORT=3600; SCRIPT=demo-clinic.mjs;     FLOW_PORT=3500 ;;
+  *) echo "unknown demo: $NAME (leadworks|analytics|flow|connect|leadgenius|chain|admissions|clinic)" >&2; exit 2 ;;
 esac
 
 if [ "$NAME" = "leadgenius" ]; then
@@ -82,15 +84,15 @@ if [ "$NAME" = "chain" ]; then
   (cd "$CONNECT_DIR" && ABET_ALLOW_PRIVATE_TARGETS=1 PORT=$CONNECT_PORT nohup npm run start > "$DEMO_DIR/.run-chain-connect.log" 2>&1 &)
 fi
 
-if [ "$NAME" = "admissions" ]; then
-  # Second app for this demo: Flow runs the branching workflow. Its key is
-  # minted the same way every other app's is.
+if [ "$NAME" = "admissions" ] || [ "$NAME" = "clinic" ]; then
+  # Second app for these demos: Flow runs the workflow the event wakes. Its
+  # key is minted the same way every other app's is.
   FLOW_KEY="$(cd "$REPOS_DIR/aw-abetflow" && npm run seed:key 2>&1 | grep -oE '[a-z]{2}_live_[A-Za-z0-9_-]+' | tail -1 || true)"
   if [ -z "${FLOW_KEY:-}" ]; then
     echo "could not mint the flow API key (npm run seed:key in aw-abetflow)" >&2
     exit 1
   fi
-  (cd "$REPOS_DIR/aw-abetflow" && ABET_ALLOW_PRIVATE_TARGETS=1 PORT=$FLOW_PORT nohup npm run start > "$DEMO_DIR/.run-admissions-flow.log" 2>&1 &)
+  (cd "$REPOS_DIR/aw-abetflow" && ABET_ALLOW_PRIVATE_TARGETS=1 PORT=$FLOW_PORT nohup npm run start > "$DEMO_DIR/.run-$NAME-flow.log" 2>&1 &)
 fi
 
 echo "── demo: $NAME  (app=$APP, port=$PORT, capture=:$HOOK_PORT) ──"
@@ -102,7 +104,7 @@ echo "── demo: $NAME  (app=$APP, port=$PORT, capture=:$HOOK_PORT) ──"
 cleanup() {
   kill_port "$PORT"
   if [ "$NAME" = "chain" ]; then kill_port "${CONNECT_PORT:-3400}"; fi
-  if [ "$NAME" = "admissions" ]; then kill_port "${FLOW_PORT:-3500}"; fi
+  if [ "$NAME" = "admissions" ] || [ "$NAME" = "clinic" ]; then kill_port "${FLOW_PORT:-3500}"; fi
   if [ "$NAME" = "leadgenius" ]; then kill_port "${SINK_PORT:-2525}"; fi
 }
 trap cleanup EXIT
@@ -128,14 +130,14 @@ if [ "$NAME" = "chain" ]; then
   echo "connect healthy: $(curl -s "http://localhost:$CONNECT_PORT/api/health")"
 fi
 
-if [ "$NAME" = "admissions" ]; then
+if [ "$NAME" = "admissions" ] || [ "$NAME" = "clinic" ]; then
   for _ in $(seq 1 60); do
     curl -sf "http://localhost:$FLOW_PORT/api/health" >/dev/null 2>&1 && break
     sleep 1
   done
   if ! curl -sf "http://localhost:$FLOW_PORT/api/health" >/dev/null 2>&1; then
-    echo "flow did not become healthy in 60s — tail of .run-admissions-flow.log:"
-    tail -15 "$DEMO_DIR/.run-admissions-flow.log"; exit 1
+    echo "flow did not become healthy in 60s — tail of .run-$NAME-flow.log:"
+    tail -15 "$DEMO_DIR/.run-$NAME-flow.log"; exit 1
   fi
   echo "flow healthy: $(curl -s "http://localhost:$FLOW_PORT/api/health")"
 fi

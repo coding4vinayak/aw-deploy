@@ -1,0 +1,23 @@
+# https://abetworks.in — Abetworks marketing site
+User-Agent: *
+Allow: /
+
+User-Agent: Googlebot
+User-Agent: Bingbot
+User-Agent: DuckDuckBot
+User-Agent: Applebot
+Allow: /
+
+# AI assistants and crawlers: the machine-readable index is at
+# https://abetworks.in/llms.txt — every product, its pricing, and its pages.
+User-Agent: GPTBot
+Allow: /
+User-Agent: ClaudeBot
+Allow: /
+User-Agent: PerplexityBot
+Allow: /
+User-Agent: Google-Extended
+Allow: /
+
+Host: https://abetworks.in
+Sitemap: https://abetworks.in/sitemap.xml

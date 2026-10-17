@@ -21,6 +21,12 @@ verification scripts. Not a product itself.
 
 ## What else is here
 
+- **`demo/run-demo.sh`** — one-command sales demos against the real apps:
+  lead intake with signed webhooks + CSV export (`leadworks`), the weekly
+  revenue watchdog with a rule that fires (`analytics`), workflow glue from an
+  inbound trigger to a signed completion (`flow`), and the ranked omnichannel
+  inbox (`connect`). See `demo/README.md`; numbers match
+  `~/aw-simulation-report.md`.
 - `deploy/load-test.mjs` — the six-app load harness (50–200 requests,
   concurrency 10–50) that produced §8.1's numbers in `aw-abetworks-history`.
 - `deploy/push-all.sh`, `deploy/rebuild-all.sh` — operator loops for working

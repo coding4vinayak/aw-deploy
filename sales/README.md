@@ -13,15 +13,28 @@ one-command demo whose numbers print as they happen:
 | App | Buys when the prospect says | Prove it with |
 | --- | --- | --- |
 | **LeadWorks** — $49/mo | "our lead lists are a mess — dupes, junk fields, exports that break" | `demo/run-demo.sh leadworks` — a duplicate refused **409** at the door, validation trail, dedupe sweep, signed `lead.created` / `export.completed` deliveries, CSV export |
-| **LeadGenius** — $29/user/mo | "our cold email ends up in spam and we rotate inboxes by hand" | the pricing page's warmup + deliverability-guardrail story; per-seat pricing mirrors how SDR teams add headcount |
+| **LeadGenius** — $29/user/mo | "our cold email ends up in spam and we rotate inboxes by hand" | `demo/run-demo.sh leadgenius` — a 3-prospect sequence over real SMTP: a signed **bounce** stops contact one at a single email, a signed **reply** stops contact two, contact three completes — every outbound signature verified |
 | **AbetAgent** — $99/mo | "AI does the work but nobody can verify it" | citations on every answer, step traces of what the agent did, human escalation when a task needs one |
 | **AbetConnect** — $24/agent/mo | "five channels, zero idea who actually matters" | `demo/run-demo.sh connect` — 17 messages ranked 0–100: the 40-seat enquiry **100**, the marketing blast **0** |
 | **AbetAnalytics** — $19/mo | "I don't see revenue problems until the month is closed" | `demo/run-demo.sh analytics` — frozen snapshots, one rule fires and one stays silent, alerts delivered dual-signed |
 
+### Cross-product stories — the strongest 10 minutes
+
+Three demos run **two products wired together** and print the handoffs
+(event ids carried between apps, signatures verified offline). Run these
+when the prospect's pain spans teams — that's most of them:
+
+| Demo | The story | Why it closes |
+| --- | --- | --- |
+| `demo/run-demo.sh chain` | A law firm's intake desk: five enquiries into **Connect**, only the founder's urgent summons scores **HOT** and leaves the inbox into a **Flow** run that alerts the right person | "Your tools should talk. Watch only the one that matters page a human." |
+| `demo/run-demo.sh admissions` | A training institute: enquiries into **LeadWorks**, duplicates refused, the tag decides the lane — priority runs alert *and* write **QUALIFIED** back to the lead | "The CRM updates itself; the counsellor just gets the alert." |
+| `demo/run-demo.sh clinic` | A clinic's slow week: appointments into **Analytics**, the cancellation number trips a rule, **Flow** wakes the front desk with the number in the alert | "You hear about the bad week while it's still this week." |
+
 **Free on purpose — say this out loud:** AbetFlow (workflow glue: inbound
 webhook → multi-step run → signed completion) and AbetAPI (scoped keys,
 events, signed webhook deliveries, delivery log, NuCRM bridge) are **$0**.
-They make the paid apps stickier and cost the customer nothing.
+They make the paid apps stickier and cost the customer nothing — and the
+cross-product demos above are the proof that the wiring is real.
 
 **The hub** (`hub.abetworks.in`) — 35 free tools, every lead captured, every
 tool page an honest "paid tier in build-out" preview. It is the top of the
@@ -34,6 +47,9 @@ result is your opening line.
    what do you do today?"* Let them describe the spreadsheet.
 2. **Show proof, not UI** — run `demo/run-demo.sh <app>` (or screenshare the
    matching story). The demo hits the real product with real data; say that.
+   If the pain spans teams, open with a **cross-product story**
+   (`chain` / `admissions` / `clinic` in the table above) — two products,
+   one alert, every handoff signature-verified.
 3. **Pricing page** — price is public, the trial is self-serve, the card is
    up front. The card **is** the qualifier; don't discount the first week.
 4. **Close on the trial** — *"Start the 14-day trial now and I'll walk the

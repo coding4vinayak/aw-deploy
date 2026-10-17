@@ -8,13 +8,16 @@
 #   demo/run-demo.sh flow        # portal lead → workflow run → templated alert + signed completion
 #   demo/run-demo.sh connect     # ranked omnichannel inbox (re-seeds the demo workspace)
 #   demo/run-demo.sh leadgenius  # outbound sequence: intro + guarded follow-up, bounce/reply stop it
+#   demo/run-demo.sh chain       # Connect triage → Flow workflow: only HOT leads leave the inbox
 #
 # Env: AW_REPOS_DIR (default ~/repos) · HOOK_PORT (default 3799) · SINK_PORT (default 2525, leadgenius only)
 #
 # Prerequisites (once per machine): local Postgres + Redis, each app's `.env`
 # pointing at its local database, and `npm run db:deploy` + seed where it exists.
 # See demo/README.md. The leadgenius demo also needs `psql` on PATH and the
-# app's `INBOUND_WEBHOOK_SIGNING_SECRET` (defaulted here for local runs).
+# app's `INBOUND_WEBHOOK_SIGNING_SECRET` (defaulted here for local runs). The
+# chain demo boots TWO apps (Flow + Connect) and reads Connect's one-time API
+# key straight out of its seed output.
 set -euo pipefail
 
 NAME="${1:?usage: run-demo.sh <leadworks|analytics|flow|connect>}"
@@ -41,7 +44,8 @@ case "$NAME" in
   analytics)  APP=aw-abetanalytics; PORT=3600; SCRIPT=demo-analytics.mjs ;;
   flow)       APP=aw-abetflow;      PORT=3500; SCRIPT=demo-flow.mjs ;;
   leadgenius) APP=aw-leadgenius;    PORT=3200; SCRIPT=demo-leadgenius.mjs ;;
-  *) echo "unknown demo: $NAME (leadworks|analytics|flow|connect|leadgenius)" >&2; exit 2 ;;
+  chain)      APP=aw-abetflow;      PORT=3500; SCRIPT=demo-chain-intake.mjs; CONNECT_PORT=3400 ;;
+  *) echo "unknown demo: $NAME (leadworks|analytics|flow|connect|leadgenius|chain)" >&2; exit 2 ;;
 esac
 
 if [ "$NAME" = "leadgenius" ]; then
@@ -59,6 +63,23 @@ if [ "$NAME" = "leadgenius" ]; then
 fi
 
 LOG="$DEMO_DIR/.run-$NAME.log"
+
+if [ "$NAME" = "chain" ]; then
+  # The chain boots TWO apps; this one first, before the generic Flow boot
+  # below. Connect is re-seeded every run: that rebuilds its demo workspace
+  # cleanly and prints the one-time API key, which is the only copy that will
+  # ever exist (it is stored hashed).
+  CONNECT_DIR="$REPOS_DIR/aw-abetConnect"
+  SEED_OUT="$(cd "$CONNECT_DIR" && npm run seed 2>&1)" || true
+  CONNECT_KEY="$(printf '%s\n' "$SEED_OUT" | grep -oE 'API key \(shown once\): [A-Za-z0-9_-]+' | tail -1 | awk '{print $NF}')"
+  if [ -z "${CONNECT_KEY:-}" ]; then
+    echo "connect seed did not yield an API key — tail of its output:" >&2
+    printf '%s\n' "$SEED_OUT" | tail -15 >&2
+    exit 1
+  fi
+  (cd "$CONNECT_DIR" && ABET_ALLOW_PRIVATE_TARGETS=1 PORT=$CONNECT_PORT nohup npm run start > "$DEMO_DIR/.run-chain-connect.log" 2>&1 &)
+fi
+
 echo "── demo: $NAME  (app=$APP, port=$PORT, capture=:$HOOK_PORT) ──"
 
 # ABET_ALLOW_PRIVATE_TARGETS=1 lets the app deliver to the local capture server;
@@ -67,6 +88,7 @@ echo "── demo: $NAME  (app=$APP, port=$PORT, capture=:$HOOK_PORT) ──"
 
 cleanup() {
   kill_port "$PORT"
+  if [ "$NAME" = "chain" ]; then kill_port "${CONNECT_PORT:-3400}"; fi
   if [ "$NAME" = "leadgenius" ]; then kill_port "${SINK_PORT:-2525}"; fi
 }
 trap cleanup EXIT
@@ -79,6 +101,18 @@ if ! curl -sf "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
   echo "app did not become healthy in 60s — tail of $LOG:"; tail -15 "$LOG"; exit 1
 fi
 echo "app healthy: $(curl -s "http://localhost:$PORT/api/health")"
+
+if [ "$NAME" = "chain" ]; then
+  for _ in $(seq 1 60); do
+    curl -sf "http://localhost:$CONNECT_PORT/api/health" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  if ! curl -sf "http://localhost:$CONNECT_PORT/api/health" >/dev/null 2>&1; then
+    echo "connect did not become healthy in 60s — tail of .run-chain-connect.log:"
+    tail -15 "$DEMO_DIR/.run-chain-connect.log"; exit 1
+  fi
+  echo "connect healthy: $(curl -s "http://localhost:$CONNECT_PORT/api/health")"
+fi
 echo
 
 KEY="$(cd "$REPOS_DIR/$APP" && npm run seed:key 2>&1 | grep -oE '[a-z]{2}_live_[A-Za-z0-9_-]+' | tail -1 || true)"
@@ -87,4 +121,6 @@ if [ -z "$KEY" ]; then
   exit 1
 fi
 
-API_KEY="$KEY" APP_BASE="http://localhost:$PORT" INBOUND_SECRET="${INBOUND_WEBHOOK_SIGNING_SECRET:-}" node "$DEMO_DIR/$SCRIPT"
+API_KEY="$KEY" APP_BASE="http://localhost:$PORT" INBOUND_SECRET="${INBOUND_WEBHOOK_SIGNING_SECRET:-}" \
+CONNECT_KEY="${CONNECT_KEY:-}" CONNECT_BASE="http://localhost:${CONNECT_PORT:-3400}" \
+node "$DEMO_DIR/$SCRIPT"

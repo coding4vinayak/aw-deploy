@@ -405,6 +405,9 @@ services:
         sync: false
       - key: LLM_MODEL
         sync: false
+      # LLM request timeout in ms (blank = 12000)
+      - key: LLM_TIMEOUT_MS
+        sync: false
       # Password for the first admin account the seed creates
       - key: SEED_PASSWORD
         sync: false

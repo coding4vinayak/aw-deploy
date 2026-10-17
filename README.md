@@ -35,6 +35,9 @@ verification scripts. Not a product itself.
   numbers match `~/aw-simulation-report.md`.
 - `deploy/load-test.mjs` — the six-app load harness (50–200 requests,
   concurrency 10–50) that produced §8.1's numbers in `aw-abetworks-history`.
+- **`sales/`** — the selling kit: what is sold and to whom, the 10-minute demo
+  calls, outreach templates and the objection matrix, and the price sheet —
+  every claim mapped to a runnable demo or an acceptance check.
 - `deploy/push-all.sh`, `deploy/rebuild-all.sh` — operator loops for working
   from local clone trees.
 

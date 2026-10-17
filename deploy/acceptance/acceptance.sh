@@ -67,8 +67,9 @@ check_discovery() {
 
 # The link card every public host should present: og:image must resolve to a
 # real image — that's the first thing a prospect sees when the URL is shared
-# in WhatsApp, email, or LinkedIn. Absolute (paid apps, via metadataBase) or
-# relative (hub's /og.png) both accepted.
+# in WhatsApp, email, or LinkedIn. Absolute (apps, via metadataBase) or
+# relative (hub's and pdf's /og.png) both accepted. Fleet-wide since the free
+# three joined: flow + api generate theirs, pdf ships a static one.
 check_linkcard() {
   local base="$1" html og abs ct
   html=$(get_body "$base/")
@@ -183,6 +184,7 @@ check_api() {
   c=$(post_code "$base/api/v1/inbound/nucrm/acceptance-probe" --data '{}')
   if is_4xx "$c"; then ok 'NuCRM bridge refuses junk' "→ $c"; else bad 'NuCRM bridge refuses junk' "→ $c"; fi
   check_discovery "$base" yes
+  check_linkcard "$base"
 }
 
 check_flow() {
@@ -191,12 +193,14 @@ check_flow() {
   local c; c=$(post_code "$base/api/webhooks/acceptance-probe" -H 'x-api-key: not-the-secret' --data '{}')
   if is_4xx "$c"; then ok 'workflow webhooks refuse a wrong secret' "→ $c"; else bad 'workflow webhooks refuse a wrong secret' "→ $c"; fi
   check_discovery "$base" yes
+  check_linkcard "$base"
 }
 
 check_pdf() {
   local base="$1"
   check_front "$base"; check_health_optional "$base"
   check_discovery "$base" no
+  check_linkcard "$base"
 }
 
 # The marketing site: front page now; the AI files (llms.txt, openapi.json,

@@ -11,8 +11,12 @@
 #   · billing webhooks reject unsigned AND forged payloads (4xx — never 2xx/5xx)
 #   · the API publishes its OpenAPI contract and refuses anonymous callers
 #   · abetflow's workflow webhooks refuse a wrong secret
-#   · the hub's owner route refuses no-token reads and /llms.txt keeps its
-#     honesty line
+#   · the hub's owner route refuses no-token reads, /llms.txt keeps its
+#     honesty line, and the UI carries no temporary *.onrender.com links
+#   · every app host serves its discovery files — /llms.txt (the AI index)
+#     and /robots.txt (pointing at the index where it is a static file)
+#   · the marketing site's AI files serve once shipped (missing = skip, see
+#     deploy/site-ai-pack), and its robots gains AI directives
 #
 # Usage:
 #   bash acceptance.sh                 # the production hosts (blueprint domains)
@@ -33,6 +37,33 @@ post_code() { local url="$1"; shift; curl -s -o /dev/null -w '%{http_code}' --ma
 
 is_4xx() { [ "${1:-000}" -ge 400 ] 2>/dev/null && [ "${1:-000}" -lt 500 ]; }
 is_ok_or_redirect() { case "${1:-000}" in 2??|30?) return 0 ;; *) return 1 ;; esac; }
+
+# Discovery files every shipped app host carries (the llms/robots PRs).
+# /llms.txt is the machine-readable index; /robots.txt must serve and — where
+# it is a static public/ file — point at the index. Route-based robots (pdf,
+# hub) can't carry comment lines, so the pointer check is skipped there.
+check_discovery() {
+  local base="$1" pointer="${2:-yes}"
+  local c b
+  c=$(get_code "$base/llms.txt"); b=$(get_body "$base/llms.txt")
+  if [ "$c" = 200 ] && printf '%s' "$b" | head -1 | grep -q '^# '; then
+    ok 'llms.txt serves the product index' "llms.txt → 200"
+  else
+    bad 'llms.txt serves the product index' "llms.txt → $c"
+  fi
+  c=$(get_code "$base/robots.txt"); b=$(get_body "$base/robots.txt")
+  if [ "$c" != 200 ]; then
+    bad 'robots.txt serves' "robots.txt → $c"
+  elif [ "$pointer" = yes ]; then
+    if printf '%s' "$b" | grep -q 'llms.txt'; then
+      ok 'robots.txt points at the llms index' 'llms.txt mentioned'
+    else
+      bad 'robots.txt points at the llms index' 'served but no llms.txt mention'
+    fi
+  else
+    ok 'robots.txt serves' 'robots.txt → 200 (route-based)'
+  fi
+}
 
 check_front() {
   local c; c=$(get_code "$1/")
@@ -85,6 +116,7 @@ check_paid() {
   if is_4xx "$w1"; then ok 'billing webhook rejects unsigned payloads' "→ $w1"; else bad 'billing webhook rejects unsigned payloads' "→ $w1"; fi
   w2=$(post_code "$base/api/billing/webhook" -H 'stripe-signature: t=1,v1=deadbeef' --data '{"type":"customer.subscription.deleted"}')
   if is_4xx "$w2"; then ok 'billing webhook rejects forged signatures' "→ $w2"; else bad 'billing webhook rejects forged signatures' "→ $w2"; fi
+  check_discovery "$base" yes
 }
 
 check_hub() {
@@ -102,6 +134,12 @@ check_hub() {
   local r s
   r=$(get_code "$base/robots.txt"); s=$(get_code "$base/sitemap.xml")
   if [ "$r" = 200 ] && [ "$s" = 200 ]; then ok 'crawler files serve' "robots → $r, sitemap → $s"; else bad 'crawler files serve' "robots → $r, sitemap → $s"; fi
+  b=$(get_body "$base/")
+  if printf '%s' "$b" | grep -qi 'onrender\.com'; then
+    bad 'no temporary Render domain in the UI' 'onrender.com found in the front page'
+  else
+    ok 'no temporary Render domain in the UI' 'suite links carry the canonical domain'
+  fi
 }
 
 check_api() {
@@ -118,6 +156,7 @@ check_api() {
   case "$c" in 401|403) ok 'anonymous API calls refused' "whoami → $c" ;; *) bad 'anonymous API calls refused' "whoami → $c" ;; esac
   c=$(post_code "$base/api/v1/inbound/nucrm/acceptance-probe" --data '{}')
   if is_4xx "$c"; then ok 'NuCRM bridge refuses junk' "→ $c"; else bad 'NuCRM bridge refuses junk' "→ $c"; fi
+  check_discovery "$base" yes
 }
 
 check_flow() {
@@ -125,15 +164,49 @@ check_flow() {
   check_front "$base"; check_health "$base"
   local c; c=$(post_code "$base/api/webhooks/acceptance-probe" -H 'x-api-key: not-the-secret' --data '{}')
   if is_4xx "$c"; then ok 'workflow webhooks refuse a wrong secret' "→ $c"; else bad 'workflow webhooks refuse a wrong secret' "→ $c"; fi
+  check_discovery "$base" yes
 }
 
 check_pdf() {
   local base="$1"
   check_front "$base"; check_health_optional "$base"
+  check_discovery "$base" no
 }
 
+# The marketing site: front page now; the AI files (llms.txt, openapi.json,
+# robots AI directives) ship with deploy/site-ai-pack. Not yet applied = an
+# honest SKIP; served-but-wrong = FAIL.
 check_site() {
-  check_front "$1"
+  local base="$1" c b
+  check_front "$base"
+  c=$(get_code "$base/llms.txt"); b=$(get_body "$base/llms.txt")
+  if [ "$c" = 200 ]; then
+    if printf '%s' "$b" | grep -q '## Products'; then
+      ok 'site llms.txt (AI index)' 'products section present'
+    else
+      bad 'site llms.txt (AI index)' 'served but missing the Products index'
+    fi
+  else
+    skip 'site llms.txt (AI index)' "$c — apply deploy/site-ai-pack/ once the site repo is identified"
+  fi
+  c=$(get_code "$base/openapi.json"); b=$(get_body "$base/openapi.json")
+  if [ "$c" = 200 ]; then
+    if printf '%s' "$b" | grep -q '"openapi"'; then
+      ok 'site openapi.json (contract)' 'OpenAPI document serves'
+    else
+      bad 'site openapi.json (contract)' 'served but not an OpenAPI document'
+    fi
+  else
+    skip 'site openapi.json (contract)' "$c — ships with deploy/site-ai-pack/"
+  fi
+  c=$(get_code "$base/robots.txt"); b=$(get_body "$base/robots.txt")
+  if [ "$c" != 200 ]; then
+    bad 'site robots.txt serves' "robots.txt → $c"
+  elif printf '%s' "$b" | grep -q 'GPTBot'; then
+    ok 'site robots.txt AI directives' 'GPTBot block present'
+  else
+    skip 'site robots.txt AI directives' 'allow-list serves; the AI block ships with deploy/site-ai-pack/'
+  fi
 }
 
 check_lite() {
@@ -162,6 +235,12 @@ default_targets=(
 targets=("${default_targets[@]}")
 if [ "${1:-}" != "" ] && [ -f "$1" ]; then
   mapfile -t targets < "$1"
+fi
+
+# Sourced (see deploy/acceptance/local/ or a scratch test)? Then only define
+# functions and let the caller drive them.
+if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then
+  return 0 2>/dev/null || exit 0
 fi
 
 for line in "${targets[@]}"; do

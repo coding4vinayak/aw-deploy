@@ -65,6 +65,30 @@ check_discovery() {
   fi
 }
 
+# The link card every public host should present: og:image must resolve to a
+# real image — that's the first thing a prospect sees when the URL is shared
+# in WhatsApp, email, or LinkedIn. Absolute (paid apps, via metadataBase) or
+# relative (hub's /og.png) both accepted.
+check_linkcard() {
+  local base="$1" html og abs ct
+  html=$(get_body "$base/")
+  og=$(printf '%s' "$html" | grep -oE 'property="og:image" content="[^"]*"' | head -1 | sed -E 's/.*content="([^"]*)".*/\1/')
+  if [ -z "$og" ]; then
+    bad 'link card renders (og:image)' 'no og:image in the front page head'
+    return
+  fi
+  case "$og" in
+    http*) abs="$og" ;;
+    *) abs="$base$og" ;;
+  esac
+  ct=$(curl -s -o /dev/null -w '%{http_code} %{content_type}' --max-time 20 "$abs")
+  if [ "$ct" = "200 image/png" ] || [ "$ct" = "200 image/jpeg" ]; then
+    ok 'link card renders (og:image)' "serves $(printf '%s' "$ct" | cut -d' ' -f2)"
+  else
+    bad 'link card renders (og:image)' "$abs → $ct"
+  fi
+}
+
 check_front() {
   local c; c=$(get_code "$1/")
   if is_ok_or_redirect "$c"; then ok 'front page serves' "$1/ → $c"; else bad 'front page serves' "$1/ → $c"; fi
@@ -117,6 +141,7 @@ check_paid() {
   w2=$(post_code "$base/api/billing/webhook" -H 'stripe-signature: t=1,v1=deadbeef' --data '{"type":"customer.subscription.deleted"}')
   if is_4xx "$w2"; then ok 'billing webhook rejects forged signatures' "→ $w2"; else bad 'billing webhook rejects forged signatures' "→ $w2"; fi
   check_discovery "$base" yes
+  check_linkcard "$base"
 }
 
 check_hub() {
@@ -140,6 +165,7 @@ check_hub() {
   else
     ok 'no temporary Render domain in the UI' 'suite links carry the canonical domain'
   fi
+  check_linkcard "$base"
 }
 
 check_api() {

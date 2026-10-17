@@ -2,36 +2,45 @@
 
 ![CI](https://github.com/coding4vinayak/aw-deploy/actions/workflows/ci.yml/badge.svg)
 
+The Abetworks deploy tooling — blueprints, the deploy-day runbook, and the
+verification scripts. Not a product itself.
 
-The Abetworks deploy tooling. Nothing else. This repo is the code that generates,
-verifies, load-tests, and pushes the rest of the family — not a product itself.
+## Start here
 
-## What's here
+- **`deploy/DEPLOY.md`** — the deploy-day runbook. Two Blueprint imports,
+  Stripe, DNS, verify. Follow it in order.
+- **`render.blueprint.yaml`** — the hub: one service (`abetworks-hub`, from
+  `aw-abethub`), Starter + a 1 GB disk where captured leads live.
+- **`deploy/render.blueprint.fleet.yaml`** — the fleet: 7 apps + 7 Postgres +
+  5 Key Value, custom domains pre-declared, ≈ $91/mo production (a $0 trial
+  profile is documented in the file header, traps included).
+- **`deploy/STRIPE.md`** — products, prices, webhooks, customer portal and the
+  restricted live key for the 5 paid apps.
+- **`deploy/smoke-test.sh`** — post-deploy health sweep across every host
+  (`/`, `/api/health`, `/pricing`, `/robots.txt`, `/llms.txt`).
 
-- `make_standalone_tools.mjs` — the generator. Reads `hub/lib/registry.js` and
-  writes ~35 single-tool forks. Run it from a checkout of `aw-abethub`.
-- `deploy/check-parity.mjs` — asserts the standalone forks match their hub
-  routes for slug, title, price, engine behaviour.
+## What else is here
+
 - `deploy/load-test.mjs` — the six-app load harness (50–200 requests,
   concurrency 10–50) that produced §8.1's numbers in `aw-abetworks-history`.
-- `deploy/verify-standalone.mjs` — the smoke walk on each generated fork.
-- `deploy/push-all.sh`, `deploy/rebuild-all.sh` — the operator loops.
-- `deploy/DEPLOY.md` — the render.com + vercel layout notes.
-- `add_metadata.mjs`, `add_og_images.mjs`, `repair_metadata.mjs` — one-time
-  transforms against the 35-fork output. Kept so a future round can rerun
-  them after a schema change rather than reauthoring from scratch.
-- `render.blueprint.yaml` — the Render Blueprint describing 36 services:
-  hub + 35 standalone. Import in Render's dashboard or host this URL.
+- `deploy/push-all.sh`, `deploy/rebuild-all.sh` — operator loops for working
+  from local clone trees.
+
+**Legacy — the old 35-fork topology, not deployed:** `make_standalone_tools.mjs`,
+`deploy/check-parity.mjs`, `deploy/verify-standalone.mjs`, `add_metadata.mjs`,
+`add_og_images.mjs`, `repair_metadata.mjs`. Those single-tool fork repos were
+never created; the live topology serves all 35 tools from the hub as routes.
+The scripts are kept so a future round can generate real forks if wanted.
 
 ## What this repo is NOT
 
-Not the apps themselves. Each app is its own private repo on `coding4vinayak`
-(`aw-abetagent`, `aw-abetanalytics`, `aw-abetapi`, `aw-abetflow`,
-`aw-leadgenius`, `aw-leadworks`, `aw-abethub`, `aw-abetpdf`,
+Not the apps themselves. Each app is its own **public** repo on
+`coding4vinayak` (`aw-abetagent`, `aw-abetanalytics`, `aw-abetapi`,
+`aw-abetflow`, `aw-leadgenius`, `aw-leadworks`, `aw-abethub`, `aw-abetpdf`,
 `aw-abetConnect`, `aw-automation-service`). The campaign ledger lives in
 `aw-abetworks-history`. This repo holds the *how they get built and shipped*.
 
-## Running
+## Running (legacy fork tooling)
 
 Every script reads a staging root from the environment — after the split each
 app is its own clone, and there is no one canonical place they live.

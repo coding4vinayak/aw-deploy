@@ -1,72 +1,146 @@
 # Deploying the Abetworks suite
 
-Post-split, each app is its own independent repo (`aw-*` on `coding4vinayak`),
-and this repo holds the *how they get built and shipped*. Every script below
-takes a staging root via env vars — no hardcoded `/srv/work/...` paths.
+**Status (17 Oct 2026):** the code side is done — Postgres fleet-wide, the five
+Stripe billing engines merged, outbound/inbound webhooks merged everywhere, both
+blueprints merged. What remains is dashboard work: **two Blueprint imports,
+Stripe products, DNS**, then the smoke sweep. This file is the shortest true
+path through it; `deploy/smoke-test.sh` is the proof at the end.
 
-## 1. Push local clones to their own remotes
+## What actually exists (so this file can be short)
+
+- **Nine deployables, all public repos on `coding4vinayak`:** the 7 suite apps
+  (`aw-abetanalytics`, `aw-abetagent`, `aw-abetflow`, `aw-leadgenius`,
+  `aw-leadworks`, `aw-abetConnect`, `aw-abetapi`), the hub (`aw-abethub`),
+  and `aw-abetpdf`.
+- **Every DB app runs Postgres** and self-migrates: `prisma migrate deploy`
+  runs on every boot, so the first deploy creates its own tables. Every app
+  answers a deep `/api/health` (503 when its DB is down) — that route is also
+  the Render `healthCheckPath`, so a deploy whose migrations failed never takes
+  traffic.
+- **Two blueprints, both in this repo:**
+
+  | File | Provisions | Cost |
+  |---|---|---|
+  | `deploy/render.blueprint.fleet.yaml` | 7 apps + 7 Postgres + 5 Key Value + pre-declared custom domains | ≈ **$91/mo** production; `$0` trial profile in the file header (with its traps named) |
+  | `render.blueprint.yaml` | the hub: one service `abetworks-hub` from `aw-abethub`, Starter + 1 GB disk | ≈ **$7/mo** + ~$0.25 disk |
+
+> The old "hub + 35 standalone forks" design (36 services, `${GH_ACCOUNT}`
+> placeholders) pointed at repos that never existed and could never import.
+> It is gone: the hub serves all 35 tools as routes. The fork generator
+> survives at the bottom of this file, clearly marked as not part of the deploy.
+
+## 1. Import the fleet blueprint
+
+Render Dashboard → **New → Blueprint** → connect repo **`aw-deploy`** → set the
+blueprint path to **`deploy/render.blueprint.fleet.yaml`** (Render asks for the
+path during setup; it defaults to `render.yaml`).
+
+- Render prompts for every `sync: false` var: Stripe keys/price IDs, Resend,
+  LLM keys. **Every one is optional** — leave it blank and that feature stays
+  off; the app boots and sells the rest.
+- Datastores, `DATABASE_URL`/`REDIS_URL` wiring, custom domains and the
+  migrate-on-boot are all in the file. Nothing to click afterwards.
+- Service names are matched in place: a later re-sync updates services, it
+  never duplicates them.
+
+## 2. Import the hub blueprint
+
+Render Dashboard → **New → Blueprint** → repo **`aw-deploy`** → path
+**`render.blueprint.yaml`** (equivalently: repo `aw-abethub` → `render.yaml` —
+the same service either way).
+
+The hub must stay on **Starter**: free instances sleep after ~15 min *and*
+cannot attach a disk — and the 1 GB disk at `/data` is where every captured
+lead lands (`DATA_DIR=/data`). On free, leads die on every deploy.
+
+## 3. Stripe — the 5 paid apps
+
+Full, ready-to-paste CLI in **`deploy/STRIPE.md`** (≈20 minutes, test mode
+first): products + two prices per app, five webhook endpoints, the customer
+portal, then the restricted live key. The blueprint import prompts for exactly
+those vars — paste them there, or add them in each service's Environment tab.
+
+## 4. DNS (Cloudflare)
+
+Every service domain is already declared in the blueprints; add one CNAME per
+subdomain pointing at its `onrender.com` host, then purge Cloudflare's cache.
+
+| Host | Points at |
+|---|---|
+| `abetworks.in` + `www` | the marketing site — attach the domain in Render first (this is the 5-minute §F1 fix; 520s end when the cache purges) |
+| `hub.abetworks.in` | `abetworks-hub` |
+| `analytics.abetworks.in` · `abetagent.abetworks.in` · `flow.abetworks.in` · `leadgenius.abetworks.in` · `leadworks.abetworks.in` · `connect.abetworks.in` · `api.abetworks.in` | their fleet services |
+| `pdf.abetworks.in` | `aw-abetpdf` (deploys from its own repo + render.yaml) |
+| `tools.abetworks.in` | already live (Vercel) |
+
+The old wildcard record (`*` → legacy InfinityFree host) is what makes
+subdomains 520 today — replace it with the per-service records above (or
+re-point it), and leave nothing aimed at the old host. After each attach:
+`curl -sI https://<host> | head -1` → 200.
+
+## 5. First deploy: seed + verify
+
+**Seed the abetapi root key once** (no Shell on trial plans — run it from your
+laptop against the database's external connection string):
 ```bash
-# Each clone already has `origin` pointing at its GitHub repo.
-AW_STAGING_ROOT=~/aw-staging bash deploy/push-all.sh            # push
-AW_STAGING_ROOT=~/aw-staging bash deploy/push-all.sh --dry-run  # show what would push
+DATABASE_URL='<external connection string>' npm run db:deploy   # idempotent
+DATABASE_URL='<same>'                       npm run seed:key    # prints the root key — copy it once
 ```
-This does not create repos; the `aw-<app>` repos on GitHub already exist.
-`push-all.sh` skips any dir without `.git`, and skips `aw-deploy` itself.
 
-## 2. Render Blueprint (once, creates the hub + 35 tool services)
-- Host `render.blueprint.yaml` publicly (gist or a repo), then
-  Render → **New → Blueprint** → paste the raw URL.
-- When prompted, set shared env var `GH_ACCOUNT` = the GitHub account that owns
-  the standalone tool forks this blueprint deploys.
-- Free plan, region singapore, health checks on `/`. Each tool honors `$PORT`.
-
-## 3. Domain + wildcard DNS
-In your DNS for `abetworks.in` add one record:
-```
-CNAME  *.abetworks.in  →  <your-account>.onrender.com
-```
-Then in each Render service → Settings → Domains: add `<slug>.abetworks.in`.
-Hub: `hub.abetworks.in`. One wildcard covers all 36.
-
-## 4. AI keys (optional but recommended)
-Every AI-wired tool works keyless via deterministic engines. To enable AI quality, set env vars per service (or account-wide):
-- `ABET_API_KEY` (+ optional `ABET_API_BASE`, `ABET_MODEL`), or
-- `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`, `OPENAI_MODEL`) for any OpenAI-compatible provider.
-
-## 5. After any hub change
-The generator (`make_standalone_tools.mjs`) reads a hub clone and writes 35
-standalone forks to a sibling directory. Both paths are env-var overridable:
 ```bash
-AW_HUB=~/aw-staging/abethub \
-AW_FORKS_OUT=~/aw-forks \
-  node make_standalone_tools.mjs
-
-AW_STAGING_ROOT=~/aw-staging bash deploy/rebuild-all.sh   # build every app with a build script
-
-# Commit + push the hub, then each fork directory that has its own remote.
-AW_STAGING_ROOT=~/aw-staging bash deploy/push-all.sh
+bash deploy/smoke-test.sh   # / /api/health /pricing /robots.txt /llms.txt on every host
 ```
-Render auto-deploys on push.
 
-## Lead storage
-Each tool appends leads to `data/leads.json` on its 1GB Render disk (`/data`) declared in its `render.yaml`.
+**Grade:** every app's `/api/health` returns `{"ok":true,"db":"up"}`.
+A **503** means DB/migrations are wrong — and because the blueprint makes
+`/api/health` the health check, traffic never switched to that deploy.
 
-## 6. Monetization ops checklist (from 2025-26 best-practice research)
-P0 — before sending ANY email:
-- Do not send bulk from Render — set up an ESP (Brevo/Mailgun free tier). SPF+DKIM+DMARC on abetworks.in first (your own EmailHealth tool should pass on the domain).
-- Leads export: each service appends to `data/leads.json`; a nightly job (or webhook) should push new emails into the ESP list with the tool name as a merge field.
-- Double opt-in on the report email: the "Sent ✓" capture means we STORE it; the ESP confirmation email is the actual consent — this is also GDPR Art. 6(1)(a) hygiene (our /privacy says consent).
+Then the sales walk, per paid app in a fresh private window:
 
-P1 — the drip that converts (5–7 emails / 14 days, triggered per tool used):
-1. Day 0: deliver the full report (value first). 2. Day 2: "the #1 thing your result got wrong — and the fix" (teach). 3. Day 5: case-style walkthrough of this tool catching a real problem (proof). 4. Day 8: offer — the paid tool at $9–19/mo, annual anchor (offer). 5. Day 13: breakup + survey link.
-- Behavior-triggered beats generic: use the `tool` field in leads.json to pick which sibling product to pitch (registry upsell is already per-tool).
+1. Landing → pricing → **Start trial** → card `4242 4242 4242 4242`, any future
+   expiry → the dashboard shows `trialing`.
+2. Portal → cancel → status shows `cancel_at_period_end` → resume.
+3. Webhook replay page: one delivery delivered, one retried.
+4. Password-reset email arrives (needs Resend configured).
+5. Re-run `npx prisma migrate deploy` → "No pending migrations".
 
-P2:
-- Watch free→email→paid per tool; A/B cap thresholds (e.g. top-3 vs top-5 results shown).
-- Suppress non-openers after the breakup email; prune lists quarterly.
+When the walk passes on test keys, redo Stripe in **live** mode, swap the env
+vars, re-run the smoke sweep — then the suite is sellable.
 
-## 7. Canonical/brand architecture (what we implemented, why)
-- Hub (hub.abetworks.in) is the SEO surface: every hub page self-canonicals.
-- Standalone subdomains cross-canonical to their hub page (`https://hub.abetworks.in/<slug>`) — Google treats co-owned cross-domain canonicals as legitimate; all 35 subdomains' link equity and ranking feed ONE brand domain, which is how buyers "eventually find out about abetworks.in".
-- Standalones still serve as shareable brand/alias pages (footer back-links to hub + 3 rotating sibling tools with descriptive anchors).
-- Every site: sitemap.xml + robots.xml host-aware, FAQPage + SoftwareApplication JSON-LD, privacy & terms pages.
+## 6. Order of operations
+
+1. **§F1 site fix** — 5 minutes, biggest unlock (the site is 520 from stale DNS).
+2. **Fleet blueprint import** (§1).
+3. **Hub blueprint import** (§2).
+4. **Stripe** products in test mode (§3) — the import prompts for the IDs.
+5. **DNS + purge** (§4).
+6. **`deploy/smoke-test.sh`** + the sales walk (§5). Flip Stripe to live.
+7. Re-run BlueRails and record the score.
+
+## After launch: leads → consent → drip
+
+- **P0 — before sending any email:** don't send bulk from Render; use an ESP
+  (Brevo/Mailgun free tier). SPF + DKIM + DMARC on `abetworks.in` first — the
+  hub's own **Email Health** tool should pass on the domain before any send.
+- Leads land in each service's `leads.json` (hub: `/data/leads.json`). Push new
+  emails into the ESP list with the tool name as a merge field; the ESP
+  confirmation is the consent (double opt-in, GDPR-hygienic).
+- **P1 — the drip that converts** (5–7 emails / 14 days, triggered per tool
+  used): Day 0 full report → Day 2 "the #1 thing your result got wrong" → Day 5
+  case-style proof → Day 8 the paid-tool offer at $9–19/mo → Day 13 breakup +
+  survey. The `tool` field in `leads.json` picks which sibling to pitch.
+- **P2:** watch free→email→paid per tool; A/B cap thresholds; suppress
+  non-openers after the breakup.
+
+## Legacy tooling in this repo (not part of the deploy)
+
+`make_standalone_tools.mjs`, `deploy/check-parity.mjs`,
+`deploy/verify-standalone.mjs`, `add_metadata.mjs`, `add_og_images.mjs`,
+`repair_metadata.mjs` generate and check **35 single-tool forks** for a
+per-subdomain topology. Those fork repos were never created — the hub carries
+all 35 tools as routes instead. The scripts stay so a future round can generate
+real forks if wanted; if you ever do, add each service with a **literal
+`repo: https://github.com/...` URL**. Never put `${...}` placeholders in
+`repo:` — Render treats them as literal text, not variables.
+`deploy/push-all.sh`, `deploy/rebuild-all.sh` and `deploy/load-test.mjs` are
+the operator loops for local clone workflows and still work.

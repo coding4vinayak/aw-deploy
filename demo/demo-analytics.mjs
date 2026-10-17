@@ -5,7 +5,8 @@
 //   - "weekly revenue < 5,000"  → the revenue snapshot breaches it → alert fires
 //   - "cart adds < 50"          → the healthy metric stays silent
 // Every delivery (snapshot.created, alert.triggered, and the rule's own
-// webhook) is signature-verified in-process.
+// webhook) is signature-verified in-process, and the week's movement is
+// split by channel with the frozen snapshot's own definition.
 //
 // Re-runnable: metric names + event types carry a per-run suffix so a second
 // run computes exactly the same 3,820 / 214 numbers.
@@ -42,15 +43,18 @@ const mB = await post("/metrics", { name: `Cart Adds (${RUN})`, description: "Pu
 log(`  "Weekly Revenue (${RUN})"  kind=sum   -> ${mA.status}`);
 log(`  "Cart Adds (${RUN})"       kind=count -> ${mB.status}`);
 
-log("\n═══ STEP 3 — a week of events flows in ═══");
+log("\n═══ STEP 3 — a week of events flows in (with the prior week behind it) ═══");
 const purchases = [420, 380, 650, 300, 510, 280, 460, 240, 580]; // = 3,820 AED
+const sources = ["instagram", "google", "instagram", "email", "google", "email", "google", "email", "instagram"];
+const previousWeek = [[900, "instagram"], [700, "google"], [500, "email"], [500, "email"]]; // = 2,600 AED, outside the snapshot window
 const ing = await post("/events", {
   events: [
-    ...purchases.map((v, i) => ({ type: `purchase_${RUN}`, value: v, occurredAt: iso((i + 1) * 6 * 3600 * 1000) })),
+    ...purchases.map((v, i) => ({ type: `purchase_${RUN}`, value: v, occurredAt: iso((i + 1) * 6 * 3600 * 1000), dimensions: { source: sources[i] } })),
+    ...previousWeek.map(([v, s], i) => ({ type: `purchase_${RUN}`, value: v, occurredAt: iso((8 + i) * 24 * 3600 * 1000), dimensions: { source: s } })),
     ...Array.from({ length: 214 }, (_, i) => ({ type: `cart_add_${RUN}`, occurredAt: iso((i % 48) * 3 * 3600 * 1000 + 60_000) })),
   ],
 });
-log(`  ingested=${ing.body.ingested}  (9 purchases worth 3,820 AED + 214 cart adds)`);
+log(`  ingested=${ing.body.ingested}  (9 purchases worth 3,820 AED this week + 4 worth 2,600 last week + 214 cart adds)`);
 
 log("\n═══ STEP 4 — the alert rules ═══");
 const rA = await post("/alerts", { metricId: mA.body.id, name: `Revenue dipped below weekly floor (${RUN})`, operator: "lt", threshold: 5000, webhookUrl: `http://localhost:${HOOK_PORT}/analytics-rule-${RUN}`, isActive: true });
@@ -87,5 +91,21 @@ for (const m of [mA.body, mB.body]) {
   const r = await (await fetch(`${API}/alerts?metricId=${m.id}`, { headers: H })).json();
   for (const a of r.rules ?? []) log(`  "${a.name}"  lastFiredAt=${a.lastFiredAt ?? "never (silent ✓)"}`);
 }
+
+log("\n═══ STEP 8 — the board asks “why?”, and the engine answers ═══");
+const bd = await post(`/metrics/${mA.body.id}/breakdown`, {
+  metricId: mA.body.id,
+  currentStart: range.rangeStart,
+  currentEnd: range.rangeEnd,
+  previousStart: iso(14 * 24 * 3600 * 1000),
+  previousEnd: range.rangeStart,
+  dimension: "source",
+});
+log(`  breakdown by "${bd.body.dimension}" -> ${bd.status}`);
+for (const r of bd.body.breakdown ?? []) {
+  const d = r.current - r.previous;
+  log(`  ${r.segment.padEnd(10)} now ${String(r.current).padStart(5)}  was ${String(r.previous).padStart(5)}  ${d >= 0 ? "+" : ""}${d}`);
+}
+log(`  headline is still ${sA.body.headline} — under the 5,000 floor — but the movement now has names: Instagram and Google carried the week, Email bled.`);
 
 await capture.close();

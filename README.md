@@ -25,8 +25,9 @@ verification scripts. Not a product itself.
   lead intake with signed webhooks + CSV export (`leadworks`), the weekly
   revenue watchdog with a rule that fires (`analytics`), workflow glue from an
   inbound trigger to a signed completion (`flow`), the ranked omnichannel
-  inbox (`connect`), and the outbound sequence that stops on reply or bounce
-  (`leadgenius`). See `demo/README.md`; numbers match
+  inbox (`connect`), the outbound sequence that stops on reply or bounce
+  (`leadgenius`), and the two-app chain where only HOT leads leave the inbox
+  and land in a workflow (`chain`). See `demo/README.md`; numbers match
   `~/aw-simulation-report.md`.
 - `deploy/load-test.mjs` — the six-app load harness (50–200 requests,
   concurrency 10–50) that produced §8.1's numbers in `aw-abetworks-history`.

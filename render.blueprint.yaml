@@ -52,10 +52,24 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      # Where lead captures land — must match the disk path above, or the disk
+      # is paid for and unused.
+      - key: DATA_DIR
+        value: /data
       # Optional AI quality upgrade for the compose-style tools (coldopener,
       # coldangle, answerready, emailaudit, meetingprep). Leave blank to keep
       # the deterministic engines.
       - key: ABET_API_KEY
         sync: false
       - key: ABET_API_BASE
+        sync: false
+      # Owner-only view/export of captured leads: GET /api/leads (Bearer token
+      # or ?token=; add ?format=csv for the ESP import). Blank keeps the route
+      # disabled (503). Pick any long random string.
+      - key: LEADS_TOKEN
+        sync: false
+      # Optional: webhook POSTed for every captured lead ({ email, tool, at }),
+      # so a lead is actionable without opening the Render shell. Any HTTPS
+      # endpoint (Slack workflow, Zapier, your own service). Blank = off.
+      - key: LEAD_NOTIFY_URL
         sync: false

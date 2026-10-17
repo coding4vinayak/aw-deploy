@@ -122,9 +122,12 @@ vars, re-run the smoke sweep — then the suite is sellable.
 - **P0 — before sending any email:** don't send bulk from Render; use an ESP
   (Brevo/Mailgun free tier). SPF + DKIM + DMARC on `abetworks.in` first — the
   hub's own **Email Health** tool should pass on the domain before any send.
-- Leads land in each service's `leads.json` (hub: `/data/leads.json`). Push new
-  emails into the ESP list with the tool name as a merge field; the ESP
-  confirmation is the consent (double opt-in, GDPR-hygienic).
+- Leads land in each service's `leads.json` (hub: `/data/leads.json`). The hub
+  serves its own: **`GET /api/leads`** — owner route, needs `LEADS_TOKEN` from
+  the blueprint import; `?format=csv` is the ESP import. Optional
+  `LEAD_NOTIFY_URL` POSTs each capture to Slack/Zapier/etc. Push new emails
+  into the ESP list with the tool name as a merge field; the ESP confirmation
+  is the consent (double opt-in, GDPR-hygienic).
 - **P1 — the drip that converts** (5–7 emails / 14 days, triggered per tool
   used): Day 0 full report → Day 2 "the #1 thing your result got wrong" → Day 5
   case-style proof → Day 8 the paid-tool offer at $9–19/mo → Day 13 breakup +

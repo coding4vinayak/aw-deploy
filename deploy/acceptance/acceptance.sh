@@ -221,6 +221,19 @@ check_hub() {
   check_linkcard "$base"
 }
 
+# Crawlers and API tooling probe /openapi.json first. It must be the same
+# document — a second copy would be a contract that can drift.
+check_openapi_alias() {
+  local base="${1%/}" c b b2
+  c=$(get_code "$base/openapi.json"); b2=$(get_body "$base/openapi.json")
+  b=$(get_body "$base/api/v1/openapi")
+  if [ "$c" = 200 ] && [ "$b2" = "$b" ]; then
+    ok 'openapi.json serves the same contract' 'conventional alias → 200, byte-identical'
+  else
+    bad 'openapi.json serves the same contract' "openapi.json → $c (or differs from /api/v1/openapi)"
+  fi
+}
+
 check_api() {
   local base="$1"
   check_front "$base"; check_health "$base"
@@ -231,6 +244,7 @@ check_api() {
   else
     bad 'OpenAPI contract published' "api/v1/openapi → $c"
   fi
+  check_openapi_alias "$base"
   c=$(get_code "$base/api/v1/whoami")
   case "$c" in 401|403) ok 'anonymous API calls refused' "whoami → $c" ;; *) bad 'anonymous API calls refused' "whoami → $c" ;; esac
   c=$(post_code "$base/api/v1/inbound/nucrm/acceptance-probe" --data '{}')

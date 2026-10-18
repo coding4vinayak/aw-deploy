@@ -30,7 +30,9 @@
 // the same campaign, fresh contacts enrolled through the plain enroll route,
 // and each arm checked against the hash the app computes — the demo re-runs
 // the arithmetic itself. The B arm's message actually carries the B subject,
-// and attribution's byVariant shows both arms counting their own sends.
+// and attribution's byVariant shows both arms counting their own sends. A
+// second test proves the OTHER lever too: two arms on one shared sequence
+// where only a variant's templateId differs — same track, two subjects.
 //
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
@@ -657,10 +659,10 @@ async function main() {
     // same salt, same hex window, same modulo, same cumulative order (the route
     // hands assignVariant its variants orderBy name, and the create response
     // carries them in exactly that order).
-    const predictArm = (testId, contactId) => {
-      const vars = abTest.variants;
+    const predictArm = (test, contactId) => {
+      const vars = test.variants;
       const total = vars.reduce((n, v) => n + v.weight, 0);
-      const bucket = parseInt(crypto.createHash("sha256").update(`${testId}:${contactId}`).digest("hex").slice(0, 8), 16) % total;
+      const bucket = parseInt(crypto.createHash("sha256").update(`${test.id}:${contactId}`).digest("hex").slice(0, 8), 16) % total;
       let acc = 0;
       for (const v of vars) {
         acc += v.weight;
@@ -678,48 +680,138 @@ async function main() {
       { first: "Amit", last: "Shah", company: "Tallow Hill", title: "VP Ops" },
       { first: "Rosa", last: "Delgado", company: "Quill and Ledger", title: "Owner" },
       { first: "Ben", last: "Arkady", company: "Nine Bar Freight", title: "GM" },
+      { first: "Sera", last: "Voss", company: "Halcyon Movers", title: "COO" },
+      { first: "Milo", last: "Frank", company: "Dray and Rail", title: "VP Ops" },
+      { first: "Ada", last: "Nwosu", company: "Copperline", title: "Director" },
+      { first: "Hugo", last: "Lind", company: "Saltmarsh Co", title: "GM" },
+      { first: "Ivy", last: "Chen", company: "Northgate Parts", title: "Head of Sales" },
+      { first: "Otto", last: "Barz", company: "Ironleaf", title: "COO" },
+      { first: "Nia", last: "Park", company: "Beacon Row", title: "VP Delivery" },
+      { first: "Samir", last: "Qade", company: "Windrow Farms", title: "Owner" },
     ];
-    const assigned = [];
-    for (const p of pool) {
-      if (new Set(assigned.map((a) => a.got)).size === 2) break;
-      const email = `${p.first.toLowerCase()}.${p.last.toLowerCase()}@ab.${RUN.slice(-6)}.dev`;
-      const cid = await mkContact({ email, firstName: p.first, lastName: p.last, company: p.company, title: p.title });
-      const enr = await api("/api/enrollments", { method: "POST", body: { contactId: cid, sequenceId, campaignId } });
-      assigned.push({
-        email,
-        expected: predictArm(abTest.id, cid),
-        got: enr.json?.enrollment?.abVariant?.name,
-        appliedSequenceId: enr.json?.enrollment?.sequenceId,
-      });
-    }
-    const arms = (name) => assigned.filter((a) => a.got === name);
+    let poolAt = 0;
+    const runArms = async (test, enrolledSequenceId, enrolledCampaignId) => {
+      const [armA, armB] = test.variants.map((v) => v.name);
+      const got = [];
+      while (poolAt < pool.length && !(got.some((a) => a.got === armA) && got.some((a) => a.got === armB))) {
+        const p = pool[poolAt];
+        poolAt += 1;
+        const email = `${p.first.toLowerCase()}.${p.last.toLowerCase()}@ab.${RUN.slice(-6)}.dev`;
+        const cid = await mkContact({ email, firstName: p.first, lastName: p.last, company: p.company, title: p.title });
+        const enr = await api("/api/enrollments", { method: "POST", body: { contactId: cid, sequenceId: enrolledSequenceId, campaignId: enrolledCampaignId } });
+        got.push({
+          email,
+          expected: predictArm(test, cid),
+          got: enr.json?.enrollment?.abVariant?.name,
+          appliedSequenceId: enr.json?.enrollment?.sequenceId,
+        });
+      }
+      return got;
+    };
+
+    const assigned = await runArms(abTest, sequenceId, campaignId);
+    const arms = (list, name) => list.filter((a) => a.got === name);
     assigned.every((a) => a.got === a.expected) && assigned.length >= 2
-      ? ok(`every enroll carried the arm its hash predicts, re-computed in the demo`, assigned.map((a) => a.got).join(","))
+      ? ok("every enroll carried the arm its hash predicts, re-computed in the demo", assigned.map((a) => a.got).join(","))
       : bad("arm assignment matches prediction", JSON.stringify(assigned.map((a) => [a.expected, a.got])));
-    arms("control").length >= 1 && arms("two_ideas").length >= 1
-      ? ok(`both arms populated within the pool (${arms("control").length} control, ${arms("two_ideas").length} two_ideas)`)
+    arms(assigned, "control").length >= 1 && arms(assigned, "two_ideas").length >= 1
+      ? ok(`both arms populated within the pool (${arms(assigned, "control").length} control, ${arms(assigned, "two_ideas").length} two_ideas)`)
       : bad("both arms populated", JSON.stringify(assigned.map((a) => a.got)));
     assigned.every((a) => a.appliedSequenceId === (a.got === "two_ideas" ? sequenceBId : sequenceId))
       ? ok("two_ideas enrollments were overridden to the B sequence; control kept the requested one")
       : bad("arm sequence override", JSON.stringify(assigned.map((a) => [a.got, a.appliedSequenceId])));
 
+    const subjectFor = (a) => msgsTo(a.email)[0]?.subject ?? "";
     const newMails = await waitFor(() => {
       const got = assigned.map((a) => msgsTo(a.email)[0]).filter(Boolean);
       return got.length === assigned.length ? got : null;
     }, { timeout: 60000, label: "each A/B contact's first email" });
-    const subjectFor = (a) => msgsTo(a.email)[0]?.subject ?? "";
     newMails && assigned.every((a) => subjectFor(a).includes(a.got === "control" ? "quick question" : "two ideas"))
-      ? ok("each new contact received the SUBJECT OF ITS ARM - the override reaches the message, not just the row", subjectFor(arms("two_ideas")[0] ?? assigned[0]))
+      ? ok("each new contact received the SUBJECT OF ITS ARM - the override reaches the message, not just the row", subjectFor(arms(assigned, "two_ideas")[0] ?? assigned[0]))
       : bad("arm subject provenance", JSON.stringify(assigned.map((a) => subjectFor(a))));
+
+    // ------------------------------------------- same track, swapped copy --
+    // A variant may carry a template WITHOUT its own sequence: the arm walks
+    // the same steps but renders the variant's copy. This is the field the
+    // create route already existence-checks — proof it is not decoration.
+    const camp2 = await api("/api/campaigns", { method: "POST", body: { name: "Ridgeview second look", goal: "Test the same track with new copy" } });
+    const campaign2Id = pickId(camp2.json, "campaign");
+    campaign2Id ? ok("second campaign created", campaign2Id) : bad("second campaign created", JSON.stringify(camp2.json).slice(0, 200));
+    await api(`/api/campaigns/${campaign2Id}`, { method: "PATCH", body: { status: "ACTIVE" } });
+
+    const seqC = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Ridgeview single intro (shared track)",
+        channel: "EMAIL",
+        campaignId: campaign2Id,
+        stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: t1Id, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const sequenceCId = pickId(seqC.json, "sequence");
+    sequenceCId ? ok("shared-track sequence created (one step, the ORIGINAL template)", sequenceCId) : bad("shared-track sequence", JSON.stringify(seqC.json).slice(0, 200));
+
+    const tRefBad = await api("/api/abtests", {
+      method: "POST",
+      body: {
+        campaignId: campaign2Id,
+        name: "should not be created",
+        hypothesis: "template ids are claims too",
+        variants: [
+          { name: "a", weight: 50, isControl: true, sequenceId: sequenceCId },
+          { name: "b", weight: 50, isControl: false, sequenceId: sequenceCId, templateId: "0000000000000000000000000000ff00" },
+        ],
+      },
+    });
+    tRefBad.status === 400 && /does not exist in this workspace/.test(tRefBad.json?.error ?? "")
+      ? ok("variant naming a foreign template refused", tRefBad.json?.error)
+      : bad("foreign template refused", `HTTP ${tRefBad.status} ${JSON.stringify(tRefBad.json)}`);
+
+    const ab2 = await api("/api/abtests", {
+      method: "POST",
+      body: {
+        campaignId: campaign2Id,
+        name: "Same track, swapped copy",
+        hypothesis: "New copy alone beats the original on the same sequence",
+        variants: [
+          { name: "plain", weight: 50, isControl: true, sequenceId: sequenceCId },
+          { name: "swapped", weight: 50, isControl: false, sequenceId: sequenceCId, templateId: tBId },
+        ],
+      },
+    });
+    const abTest2 = ab2.json?.abTest;
+    ab2.status === 201 && abTest2?.status === "RUNNING"
+      ? ok("second test created RUNNING - one campaign, shared track, per-arm template")
+      : bad("second test created", `HTTP ${ab2.status} ${JSON.stringify(ab2.json).slice(0, 200)}`);
+
+    const assigned2 = await runArms(abTest2, sequenceCId, campaign2Id);
+    assigned2.every((a) => a.got === a.expected) && assigned2.length >= 2
+      ? ok("prediction holds across a second test: same contact shape, different salt", assigned2.map((a) => a.got).join(","))
+      : bad("second test prediction", JSON.stringify(assigned2.map((a) => [a.expected, a.got])));
+    arms(assigned2, "plain").length >= 1 && arms(assigned2, "swapped").length >= 1
+      ? ok(`both arms of the shared-track test populated (${arms(assigned2, "plain").length} plain, ${arms(assigned2, "swapped").length} swapped)`)
+      : bad("shared-track arms populated", JSON.stringify(assigned2.map((a) => a.got)));
+    assigned2.every((a) => a.appliedSequenceId === sequenceCId)
+      ? ok("every arm stayed on the SAME sequence - the difference is the copy, not the track")
+      : bad("shared track kept", JSON.stringify(assigned2.map((a) => [a.got, a.appliedSequenceId])));
+
+    const mails2 = await waitFor(() => {
+      const got = assigned2.map((a) => msgsTo(a.email)[0]).filter(Boolean);
+      return got.length === assigned2.length ? got : null;
+    }, { timeout: 60000, label: "each shared-track contact's first email" });
+    mails2 && assigned2.every((a) => subjectFor(a).includes(a.got === "plain" ? "quick question" : "two ideas"))
+      ? ok("same step, two subjects: the variant's templateId changed the rendered message, the step's did not", subjectFor(arms(assigned2, "swapped")[0] ?? assigned2[0]))
+      : bad("swapped-copy provenance", JSON.stringify(assigned2.map((a) => [a.got, subjectFor(a)])));
 
     const attr2 = await waitFor(async () => {
       const a = await api(`/api/analytics/${wsIdForAttr}?type=attribution&days=1`);
-      return a.json?.drift?.length === 0 && (a.json?.byVariant ?? []).length === 2 ? a.json : null;
-    }, { timeout: 60000, label: "attribution showing both arms" });
-    attr2 ? ok("drift still empty: the arm rows roll up in sync with the materialized day") : bad("attribution with arms");
+      return a.json?.drift?.length === 0 && (a.json?.byVariant ?? []).length === 4 ? a.json : null;
+    }, { timeout: 60000, label: "attribution showing all four arms" });
+    attr2 ? ok("drift still empty: every arm rolls up in sync with the materialized day") : bad("attribution with arms");
     const vRows = Object.fromEntries((attr2?.byVariant ?? []).map((r) => [r.key, r]));
-    vRows.control?.sent >= arms("control").length && vRows.two_ideas?.sent >= arms("two_ideas").length
-      ? ok("byVariant is real now: each arm has counted at least its own step-1 sends", `control=${vRows.control?.sent} two_ideas=${vRows.two_ideas?.sent}`)
+    const armCounts = { control: arms(assigned, "control").length, two_ideas: arms(assigned, "two_ideas").length, plain: arms(assigned2, "plain").length, swapped: arms(assigned2, "swapped").length };
+    Object.entries(armCounts).every(([k, n]) => vRows[k]?.sent >= n)
+      ? ok("byVariant is real now: all four arms have counted at least their own step-1 sends", Object.entries(armCounts).map(([k, n]) => `${k}=${vRows[k]?.sent}/${n}`).join(" "))
       : bad("byVariant rows", JSON.stringify(attr2?.byVariant));
 
     // ------------------------------------------------------------ summary --

@@ -29,7 +29,9 @@ be refused**. Per host type it checks:
   can't carry that comment, so the pointer check is skipped there — the file
   itself still has to serve. `/sitemap.xml` serves a real `<urlset>` with at
   least one `<loc>` — a 404 or an empty list fails, because a sitemap nothing
-  can discover is a pricing page a crawler never sees.
+  can discover is a pricing page a crawler never sees. The hub's
+  registry-backed sitemap is checked with the same rule, once, in
+  `check_hub`.
 - **the link card (every app host)** — the front page's `og:image` must
   resolve to a real image (200 `image/png` or `image/jpeg`), absolute or
   relative. The paid five and workflow/api hosts generate theirs at build

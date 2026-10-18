@@ -181,9 +181,10 @@ check_hub() {
   else
     bad 'llms.txt keeps the honesty line' "llms.txt → $c"
   fi
-  local r s
-  r=$(get_code "$base/robots.txt"); s=$(get_code "$base/sitemap.xml")
-  if [ "$r" = 200 ] && [ "$s" = 200 ]; then ok 'crawler files serve' "robots → $r, sitemap → $s"; else bad 'crawler files serve' "robots → $r, sitemap → $s"; fi
+  local r
+  r=$(get_code "$base/robots.txt")
+  [ "$r" = 200 ] && ok 'robots.txt serves' "robots → 200" || bad 'robots.txt serves' "robots → $r"
+  check_sitemap "$base"
   b=$(get_body "$base/")
   if printf '%s' "$b" | grep -qi 'onrender\.com'; then
     bad 'no temporary Render domain in the UI' 'onrender.com found in the front page'

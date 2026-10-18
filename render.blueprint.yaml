@@ -73,3 +73,8 @@ services:
       # endpoint (Slack workflow, Zapier, your own service). Blank = off.
       - key: LEAD_NOTIFY_URL
         sync: false
+      # Canonical public site for the hub's suite links (header CTA, footer,
+      # product upsells). Override only while the DNS switch to
+      # abetworks.in is mid-flight (then point it at the current site URL).
+      - key: SUITE_URL
+        value: https://abetworks.in

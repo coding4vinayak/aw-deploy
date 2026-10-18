@@ -1,0 +1,80 @@
+# Abetworks
+
+> Abetworks (Abet Works) is an integrated AI business suite for teams that sell, serve and scale — NuCRM, LeadGenius, LeadWorks, AbetConnect, AbetAgent, AbetFlow, AbetAnalytics and AbetAPI — plus 100+ free tools, built and supported from Mumbai, India. Every product is sold standalone and connects to the rest through API keys and signed webhooks. From $19/month with a 14-day free trial on every paid product.
+
+Key facts:
+- Founded: 2023 · Headquarters: 301, VS Road, Mumbai, Maharashtra, India
+- Founder & CEO: Vinayak Sonawane
+- Products: 9 in the suite · Native integrations: 120+ · Service practices: 6
+- Pricing: NuCRM from $19/user/mo · LeadGenius $29/user/mo · LeadWorks $49/mo · AbetConnect $24/agent/mo · AbetAgent $99/mo · AbetAnalytics $19/mo · AbetFlow, AbetAPI and Abetworks Tools are $0
+- Billing: USD or INR with GST · annual billing saves 20% · platform fees (WhatsApp/SMS/telephony/model usage) passed through at cost
+- Trials: 14 days on every paid product; card required at sign-up, cancel anytime in the billing portal · free migration on Growth plans and above
+- Data: residency in Mumbai (ap-south-1), Frankfurt and N. Virginia · GDPR and India DPDP Act ready · ISO 27001-aligned controls · SOC 2 Type II programme · signed DPA and sub-processor register
+- Languages: interfaces in English, Hindi, Marathi; AI drafting in 30+ languages
+- Customers: India, GCC, Southeast Asia, United Kingdom, United States
+- Contact: admin@abetworks.in
+
+## Products
+
+- [NuCRM](https://abetworks.in/products/nucrm/): The flagship AI CRM — scores every lead in under 30 seconds, drafts the next touch, shows managers where the pipeline is leaking. From $19/user/month.
+- [LeadGenius](https://abetworks.in/products/leadgenius/): AI sales engagement and multichannel outreach with sending warmup and deliverability guardrails, so cold email lands where it should. $29/user/month.
+- [LeadWorks](https://abetworks.in/products/leadworks/): Lead operations workspace — capture every lead once (duplicates refused at the door), with validation, dedupe and CRM-ready CSV exports. $49/month.
+- [AbetConnect](https://abetworks.in/products/abetconnect/): Customer conversations workspace — one ranked omnichannel inbox; every message scored 0–100 so churn risks and high-value enquiries rise to the top. $24/agent/month.
+- [AbetAgent](https://abetworks.in/products/abetagent/): AI agents that cite their sources, keep a step trace of what they did, and escalate to a human when a task needs one. $99/month.
+- [AbetFlow](https://abetworks.in/products/abetflow/): Workflow glue — an inbound webhook starts a multi-step run, steps call your endpoints, and every completed run publishes a signed webhook. $0 — included with the suite.
+- [AbetAnalytics](https://abetworks.in/products/abetanalytics/): Product analytics — scheduled metric snapshots, alert rules that stay silent when healthy, alerts by email and by signed webhooks. $19/month or $190/year.
+- [AbetAPI](https://abetworks.in/products/abetapi/): Developer platform — scoped API keys, events, signed webhook deliveries with retries, SSO, and the NuCRM inbound bridge. $0 — included with the suite.
+- [Abetworks Tools](https://abetworks.in/products/abet-tools/): 100+ free browser-based utilities, no signup, nothing leaves the browser. Free forever.
+
+## Platform
+
+- [Platform overview](https://abetworks.in/platform/): How the suite fits together — shared integration surface, one permission model, standalone apps.
+- [Integrations](https://abetworks.in/integrations/): 120+ native connectors plus REST, webhooks and a no-code bridge.
+- [Pricing](https://abetworks.in/pricing/): Per-seat plans, what is included on every paid plan, and pass-through fees stated plainly.
+- [Why Abetworks](https://abetworks.in/why-abetworks/): The four architectural decisions that differentiate the suite.
+- [Implementation](https://abetworks.in/implementation/): Live in 5–10 working days; named onboarding specialist for 30 days.
+
+## Solutions
+
+- By industry: [all 16 blueprints](https://abetworks.in/solutions/) — including [real estate](https://abetworks.in/solutions/industries/real-estate/), [financial services](https://abetworks.in/solutions/industries/financial-services/), [healthcare](https://abetworks.in/solutions/industries/healthcare/), [education](https://abetworks.in/solutions/industries/education/), [e-commerce & D2C](https://abetworks.in/solutions/industries/ecommerce/), [SaaS & technology](https://abetworks.in/solutions/industries/saas/) and [agencies](https://abetworks.in/solutions/industries/agencies/).
+- By team: [sales leaders](https://abetworks.in/solutions/roles/sales-leader/), [SDR](https://abetworks.in/solutions/roles/sdr/), [marketing](https://abetworks.in/solutions/roles/marketing/), [RevOps](https://abetworks.in/solutions/roles/revops/), [support](https://abetworks.in/solutions/roles/support/), [founders](https://abetworks.in/solutions/roles/founder/).
+- By outcome: [shorten sales cycles](https://abetworks.in/solutions/outcomes/shorten-sales-cycle/), [stop lead leakage](https://abetworks.in/solutions/outcomes/stop-lead-leakage/), [scale outbound](https://abetworks.in/solutions/outcomes/scale-outbound/), [consolidate your stack](https://abetworks.in/solutions/outcomes/consolidate-stack/), [automate operations](https://abetworks.in/solutions/outcomes/automate-operations/).
+
+## Comparisons
+
+Honest head-to-heads, including where the competitor is stronger. [All comparisons](https://abetworks.in/compare/):
+- [NuCRM vs Salesforce](https://abetworks.in/compare/nucrm-vs-salesforce/) · [vs HubSpot](https://abetworks.in/compare/nucrm-vs-hubspot/) · [vs Zoho CRM](https://abetworks.in/compare/nucrm-vs-zoho-crm/) · [vs Freshsales](https://abetworks.in/compare/nucrm-vs-freshsales/) · [vs Pipedrive](https://abetworks.in/compare/nucrm-vs-pipedrive/) · [vs LeadSquared](https://abetworks.in/compare/nucrm-vs-leadsquared/)
+- [LeadGenius vs Apollo](https://abetworks.in/compare/leadgenius-vs-apollo/) · [vs Instantly](https://abetworks.in/compare/leadgenius-vs-instantly/) · [AbetFlow vs Zapier](https://abetworks.in/compare/abetflow-vs-zapier/)
+
+## Resources
+
+- [Blog & guides](https://abetworks.in/blog/): research, playbooks and buying guides — including "The 2026 AI revenue stack blueprint" (6,000-word field guide).
+- [Benchmarks](https://abetworks.in/benchmarks/): every published number with sample size, definition and the weakest result.
+- [Customer stories](https://abetworks.in/customers/): named roles, measured outcomes.
+- [Playbooks](https://abetworks.in/resources/playbooks/) · [Templates](https://abetworks.in/resources/templates/) · [Glossary](https://abetworks.in/glossary/) · [Migration guides](https://abetworks.in/resources/migration/)
+- Free calculators: [ROI calculator](https://abetworks.in/tools/roi-calculator/) · [pricing estimator](https://abetworks.in/tools/pricing-calculator/) · [lead score simulator](https://abetworks.in/tools/lead-score-simulator/)
+
+## Free tools
+
+- [Abetworks Tools](https://tools.abetworks.in/): 100+ free web tools (text, developer, calculators, SEO, security, business, marketing), no signup required.
+- [Abetworks Hub](https://hub.abetworks.in/): five free-forever engines plus thirty single-feature tools in build-out (DealBrief, ChurnSignal, PricePulse, ConsentScan, InvoiceParse, ColdAngle, EmailAudit, TaxReady, PitchDeck, DataSweep and more). Nothing on the hub is purchasable yet — paid tiers are planned.
+
+## Developers
+
+- [Developer docs](https://abetworks.in/developers/) · [API reference](https://abetworks.in/developers/api/) · [Webhooks](https://abetworks.in/developers/webhooks/)
+- OpenAPI specification: https://abetworks.in/openapi.json
+
+## Machine-readable
+
+- OpenAPI 3.1 contract: [abetworks.in/openapi.json](https://abetworks.in/openapi.json) — the live gateway serves the same contract at [api.abetworks.in/api/v1/openapi](https://api.abetworks.in/api/v1/openapi).
+- Every product host serves its own /llms.txt with its exact pricing: [analytics](https://analytics.abetworks.in/llms.txt) · [leadworks](https://leadworks.abetworks.in/llms.txt) · [leadgenius](https://leadgenius.abetworks.in/llms.txt) · [abetagent](https://abetagent.abetworks.in/llms.txt) · [connect](https://connect.abetworks.in/llms.txt) · [flow](https://flow.abetworks.in/llms.txt) · [api](https://api.abetworks.in/llms.txt) · [pdf](https://pdf.abetworks.in/llms.txt)
+
+## Trust & legal
+
+- [Trust centre](https://abetworks.in/trust/) · [Data residency & privacy](https://abetworks.in/trust/data-residency/) · [Responsible AI](https://abetworks.in/trust/responsible-ai/) · [Reliability & status](https://abetworks.in/trust/reliability/) · [Sub-processors](https://abetworks.in/trust/sub-processors/)
+- [Privacy policy](https://abetworks.in/legal/privacy/) · [Terms of service](https://abetworks.in/legal/terms/) · [DPA](https://abetworks.in/legal/dpa/) · [Acceptable use](https://abetworks.in/legal/acceptable-use/) · [Cookie policy](https://abetworks.in/legal/cookies/) · [SLA](https://abetworks.in/legal/sla/) · [Refund policy](https://abetworks.in/legal/refunds/) · [Anti-spam & sending policy](https://abetworks.in/legal/anti-spam/)
+
+## Company
+
+- [About](https://abetworks.in/company/about/) · [Services](https://abetworks.in/services/) · [Careers](https://abetworks.in/company/careers/) · [Partners](https://abetworks.in/company/partners/) · [Press & brand](https://abetworks.in/company/press/) · [Contact](https://abetworks.in/contact/)
+- Social: [X @abetworks](https://x.com/abetworks) · [LinkedIn](https://www.linkedin.com/company/abetworks) · [Facebook](https://www.facebook.com/profile.php?id=61566619705918)

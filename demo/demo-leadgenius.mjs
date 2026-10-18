@@ -35,7 +35,11 @@
 // where only a variant's templateId differs — same track, two subjects. Step
 // [12] then walks the lifecycle those error messages promise: PAUSED stops
 // assignment at the next enroll, RUNNING restores the same cohorts, COMPLETED
-// names a winner from the test's own arms and is terminal.
+// names a winner from the test's own arms and is terminal. Completing with a
+// winner also stamps `confidence`: one winning-arm contact really replies over
+// a signed LinkedIn callback, and the number written is the two-proportion z
+// of winner-vs-control reply rates that this demo recomputes from the same
+// counts — and an arms-that-never-sent test is refused the verdict outright.
 //
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
@@ -704,6 +708,8 @@ async function main() {
         const enr = await api("/api/enrollments", { method: "POST", body: { contactId: cid, sequenceId: enrolledSequenceId, campaignId: enrolledCampaignId } });
         got.push({
           email,
+          contactId: cid,
+          enrollmentId: enr.json?.enrollment?.id,
           expected: predictArm(test, cid),
           got: enr.json?.enrollment?.abVariant?.name,
           appliedSequenceId: enr.json?.enrollment?.sequenceId,
@@ -745,14 +751,24 @@ async function main() {
     const seqC = await api("/api/sequences", {
       method: "POST",
       body: {
-        name: "Ridgeview single intro (shared track)",
+        name: "Ridgeview intro + tomorrow nudge (shared track)",
         channel: "EMAIL",
         campaignId: campaign2Id,
-        stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: t1Id, delayDays: 0, delayHours: 0 }],
+        // Two steps, a day apart: a single-step sequence COMPLETEs the
+        // enrollment the moment its send is recorded, and the reply the
+        // lifecycle step posts needs an ACTIVE enrollment to land on. The
+        // wait lives on step 1 because that is the engine's convention —
+        // calculateNextAction schedules what comes next from the delay of the
+        // step that just ran — and nothing in a demo run waits long enough to
+        // send step 2.
+        stepsConfig: [
+          { stepNumber: 1, channel: "EMAIL", templateId: t1Id, delayDays: 1, delayHours: 0 },
+          { stepNumber: 2, channel: "EMAIL", templateId: t2Id, delayDays: 0, delayHours: 0 },
+        ],
       },
     });
     const sequenceCId = pickId(seqC.json, "sequence");
-    sequenceCId ? ok("shared-track sequence created (one step, the ORIGINAL template)", sequenceCId) : bad("shared-track sequence", JSON.stringify(seqC.json).slice(0, 200));
+    sequenceCId ? ok("shared-track sequence created (step 1 now, step 2 tomorrow - enrollments stay ACTIVE)", sequenceCId) : bad("shared-track sequence", JSON.stringify(seqC.json).slice(0, 200));
 
     const tRefBad = await api("/api/abtests", {
       method: "POST",
@@ -822,8 +838,10 @@ async function main() {
     // This step makes that a promise the product can keep, and checks the
     // whole vocabulary: pause stops arm assignment at the very next enroll,
     // resume restores it on the same cohorts, completion names a winner from
-    // the test's own arms and is terminal.
-    console.log("\n[12] A/B lifecycle: pause stops assignment, resume restores it, completion is terminal");
+    // the test's own arms and is terminal — and the completion carries its
+    // evidence: a stamped two-proportion z the demo recomputes itself, and a
+    // flat refusal when the arms behind a claimed verdict never sent anything.
+    console.log("\n[12] A/B lifecycle: pause, resume, terminal completion - and the verdict carries evidence");
 
     const bogus = await api("/api/abtests/0000000000000000000000000000ff01", { method: "PATCH", body: { status: "PAUSED" } });
     bogus.status === 404 ? ok("unknown test id refused (404)") : bad("unknown test 404", `HTTP ${bogus.status}`);
@@ -867,10 +885,58 @@ async function main() {
       ? ok("DRAFT refused as a transition target - nothing reads it, nothing wrote it", draft.json?.error)
       : bad("DRAFT refusal", `HTTP ${draft.status}`);
 
+    // The verdict has to be stamped from evidence, not asserted: give one
+    // contact of the WINNING arm a LinkedIn URL, post the signed reply the
+    // product's own callback accepts, and let it land inside the cohort while
+    // the test is still RUNNING — so the REPLIED activity is inside the
+    // counting window the completion will read.
+    const winnerContact = arms(assigned2, "swapped")[0];
+    const handle = `ab-evidence-${RUN.slice(-6)}`;
+    const urlPatch = await api(`/api/contacts/${winnerContact.contactId}`, {
+      method: "PATCH",
+      body: { linkedinUrl: `https://www.linkedin.com/in/${handle}` },
+    });
+    urlPatch.status === 200
+      ? ok("a winning-arm contact given a LinkedIn URL the callback can find", handle)
+      : bad("winner contact linkedinUrl", `HTTP ${urlPatch.status} ${JSON.stringify(urlPatch.json).slice(0, 200)}`);
+
+    const evidenceReply = await inbound("/api/webhooks/linkedin", {
+      value: [
+        {
+          eventType: "MESSAGE_RECEIVED",
+          messageUrn: `urn:li:message:ab-evidence-${RUN}`,
+          from: { comLinkedinVoyagerMessagingMemberUrn: `urn:li:person:${handle}` },
+          body: { text: "Two ideas beats one - send the details." },
+        },
+      ],
+    });
+    evidenceReply.status === 200 ? ok("signed reply callback accepted inside the winning cohort") : bad("evidence reply", `HTTP ${evidenceReply.status} ${evidenceReply.text.slice(0, 120)}`);
+
+    const repliedEnr = await waitFor(async () => {
+      const r = await api(`/api/enrollments/${winnerContact.enrollmentId}`);
+      return r.json?.status === "REPLIED" ? r.json : null;
+    }, { timeout: 20000, label: "winning-arm enrollment REPLIED" });
+    repliedEnr
+      ? ok("the reply is the cohort's own - a REPLIED activity attached to a swapped-arm enrollment")
+      : bad("reply lands inside winning arm", JSON.stringify({ enrollmentId: winnerContact.enrollmentId }));
+
     const complete = await api(`/api/abtests/${abTest2.id}`, { method: "PATCH", body: { status: "COMPLETED", winningVariant: "swapped" } });
     complete.status === 200 && complete.json?.abTest?.status === "COMPLETED" && complete.json?.abTest?.completedAt && complete.json?.abTest?.winningVariant === "swapped"
       ? ok("test completed with a named winner and a stamped end")
       : bad("complete", `HTTP ${complete.status} ${JSON.stringify(complete.json).slice(0, 200)}`);
+
+    // The stamped number, re-derived here from counts this demo knows: the
+    // swapped arm sent one step-1 email per enrollment and collected exactly
+    // our reply; the plain arm sent the same shape and collected nothing (no
+    // control contact has a LinkedIn URL the callback could match).
+    const winnerSent = arms(assigned2, "swapped").length;
+    const controlSent = arms(assigned2, "plain").length;
+    const pooled = 1 / (winnerSent + controlSent);
+    const expectedZ = (1 / winnerSent - 0) / Math.sqrt(pooled * (1 - pooled) * (1 / winnerSent + 1 / controlSent));
+    const stamped = complete.json?.abTest?.confidence;
+    typeof stamped === "number" && Math.abs(stamped - expectedZ) < 1e-9
+      ? ok("confidence IS the two-proportion z recomputed from these cohorts", `z=${stamped.toFixed(4)} (winner 1/${winnerSent} vs control 0/${controlSent})`)
+      : bad("confidence matches recomputed z", `stamped=${stamped} expected=${expectedZ}`);
 
     const reopen = await api(`/api/abtests/${abTest2.id}`, { method: "PATCH", body: { status: "RUNNING" } });
     reopen.status === 409 && /terminal/.test(reopen.json?.error ?? "")
@@ -887,6 +953,35 @@ async function main() {
     !postCompleteEnrollment?.abVariant
       ? ok("a completed test assigns nothing to new contacts - cohorts stay the size the winner was decided on")
       : bad("completed test assigns no arms", JSON.stringify(postCompleteEnrollment?.abVariant));
+
+    // Not every test ends with a verdict — and when it doesn't, the column
+    // stays null instead of holding an invented number.
+    const closeNoVerdict = await api(`/api/abtests/${abTest.id}`, { method: "PATCH", body: { status: "COMPLETED" } });
+    closeNoVerdict.status === 200 && closeNoVerdict.json?.abTest?.completedAt &&
+      closeNoVerdict.json?.abTest?.winningVariant === null && closeNoVerdict.json?.abTest?.confidence === null
+      ? ok("a test can close WITHOUT a verdict - winningVariant and confidence stay null, not guessed")
+      : bad("close without verdict", `HTTP ${closeNoVerdict.status} ${JSON.stringify(closeNoVerdict.json?.abTest ?? closeNoVerdict.json).slice(0, 200)}`);
+
+    // And the refusal that keeps the stamped number honest: a test whose arms
+    // never sent an email cannot buy a completion with a winner.
+    const ab3 = await api("/api/abtests", {
+      method: "POST",
+      body: {
+        campaignId: campaign2Id,
+        name: "The verdict nobody earned",
+        hypothesis: "A winner needs cohorts that were actually sent",
+        variants: [
+          { name: "a", weight: 50, isControl: true, sequenceId: sequenceCId },
+          { name: "b", weight: 50, isControl: false, sequenceId: sequenceCId },
+        ],
+      },
+    });
+    const abTest3 = ab3.json?.abTest;
+    abTest3 ? ok("third test created (no contact will ever enroll)", abTest3.id) : bad("third test created", JSON.stringify(ab3.json).slice(0, 200));
+    const noEvidence = await api(`/api/abtests/${abTest3.id}`, { method: "PATCH", body: { status: "COMPLETED", winningVariant: "b" } });
+    noEvidence.status === 409 && /no sends/.test(noEvidence.json?.error ?? "")
+      ? ok("naming a winner on arms that never sent is refused - confidence is earned, not declared", noEvidence.json?.error)
+      : bad("no-sends refusal", `HTTP ${noEvidence.status} ${JSON.stringify(noEvidence.json)}`);
 
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);

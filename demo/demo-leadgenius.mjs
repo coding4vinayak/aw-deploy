@@ -32,7 +32,10 @@
 // the arithmetic itself. The B arm's message actually carries the B subject,
 // and attribution's byVariant shows both arms counting their own sends. A
 // second test proves the OTHER lever too: two arms on one shared sequence
-// where only a variant's templateId differs — same track, two subjects.
+// where only a variant's templateId differs — same track, two subjects. Step
+// [12] then walks the lifecycle those error messages promise: PAUSED stops
+// assignment at the next enroll, RUNNING restores the same cohorts, COMPLETED
+// names a winner from the test's own arms and is terminal.
 //
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
@@ -813,6 +816,77 @@ async function main() {
     Object.entries(armCounts).every(([k, n]) => vRows[k]?.sent >= n)
       ? ok("byVariant is real now: all four arms have counted at least their own step-1 sends", Object.entries(armCounts).map(([k, n]) => `${k}=${vRows[k]?.sent}/${n}`).join(" "))
       : bad("byVariant rows", JSON.stringify(attr2?.byVariant));
+
+    // ------------------------------------------------------ lifecycle [12] --
+    // Two error messages in the product tell the operator to "pause the test".
+    // This step makes that a promise the product can keep, and checks the
+    // whole vocabulary: pause stops arm assignment at the very next enroll,
+    // resume restores it on the same cohorts, completion names a winner from
+    // the test's own arms and is terminal.
+    console.log("\n[12] A/B lifecycle: pause stops assignment, resume restores it, completion is terminal");
+
+    const bogus = await api("/api/abtests/0000000000000000000000000000ff01", { method: "PATCH", body: { status: "PAUSED" } });
+    bogus.status === 404 ? ok("unknown test id refused (404)") : bad("unknown test 404", `HTTP ${bogus.status}`);
+
+    const pause = await api(`/api/abtests/${abTest.id}`, { method: "PATCH", body: { status: "PAUSED" } });
+    pause.status === 200 && pause.json?.abTest?.status === "PAUSED"
+      ? ok("test paused - the pause the 409 messages promised is a real route")
+      : bad("pause", `HTTP ${pause.status} ${JSON.stringify(pause.json).slice(0, 200)}`);
+
+    const mkAndEnroll = async (seqForEnroll, campForEnroll) => {
+      const p = pool[poolAt];
+      poolAt += 1;
+      const email = `${p.first.toLowerCase()}.${p.last.toLowerCase()}@ab.${RUN.slice(-6)}.dev`;
+      const cid = await mkContact({ email, firstName: p.first, lastName: p.last, company: p.company, title: p.title });
+      const enr = await api("/api/enrollments", { method: "POST", body: { contactId: cid, sequenceId: seqForEnroll, campaignId: campForEnroll } });
+      return enr.json?.enrollment;
+    };
+
+    const pausedEnrollment = await mkAndEnroll(sequenceId, campaignId);
+    !pausedEnrollment?.abVariant && pausedEnrollment?.sequenceId === sequenceId
+      ? ok("paused test assigns no arms - the next enrollment kept the requested sequence and joined no cohort")
+      : bad("pause stops assignment", JSON.stringify({ abVariant: pausedEnrollment?.abVariant, sequenceId: pausedEnrollment?.sequenceId }));
+
+    const resume = await api(`/api/abtests/${abTest.id}`, { method: "PATCH", body: { status: "RUNNING" } });
+    resume.status === 200 && resume.json?.abTest?.startedAt === abTest.startedAt
+      ? ok("resumed on the same cohorts: startedAt untouched, the hash salt is the same test")
+      : bad("resume keeps the cohorts", `HTTP ${resume.status} ${resume.json?.abTest?.startedAt} vs ${abTest.startedAt}`);
+
+    const resumedEnrollment = await mkAndEnroll(sequenceId, campaignId);
+    ["control", "two_ideas"].includes(resumedEnrollment?.abVariant?.name)
+      ? ok("assignment resumes where it left off", `arm=${resumedEnrollment?.abVariant?.name}`)
+      : bad("resume restores assignment", JSON.stringify(resumedEnrollment?.abVariant));
+
+    const bogusWinner = await api(`/api/abtests/${abTest2.id}`, { method: "PATCH", body: { status: "COMPLETED", winningVariant: "nope" } });
+    bogusWinner.status === 400 && /not a variant of this test/.test(bogusWinner.json?.error ?? "")
+      ? ok("winner must be one of the test's own arms", bogusWinner.json?.error)
+      : bad("winner membership", `HTTP ${bogusWinner.status} ${JSON.stringify(bogusWinner.json)}`);
+
+    const draft = await api(`/api/abtests/${abTest2.id}`, { method: "PATCH", body: { status: "DRAFT" } });
+    draft.status === 400 && /DRAFT is not a transition target/.test(draft.json?.error ?? "")
+      ? ok("DRAFT refused as a transition target - nothing reads it, nothing wrote it", draft.json?.error)
+      : bad("DRAFT refusal", `HTTP ${draft.status}`);
+
+    const complete = await api(`/api/abtests/${abTest2.id}`, { method: "PATCH", body: { status: "COMPLETED", winningVariant: "swapped" } });
+    complete.status === 200 && complete.json?.abTest?.status === "COMPLETED" && complete.json?.abTest?.completedAt && complete.json?.abTest?.winningVariant === "swapped"
+      ? ok("test completed with a named winner and a stamped end")
+      : bad("complete", `HTTP ${complete.status} ${JSON.stringify(complete.json).slice(0, 200)}`);
+
+    const reopen = await api(`/api/abtests/${abTest2.id}`, { method: "PATCH", body: { status: "RUNNING" } });
+    reopen.status === 409 && /terminal/.test(reopen.json?.error ?? "")
+      ? ok("COMPLETED is terminal - a decided test cannot re-bucket new contacts", reopen.json?.error)
+      : bad("terminal", `HTTP ${reopen.status}`);
+
+    const camp2Full = await api(`/api/campaigns/${campaign2Id}`);
+    const stored = (camp2Full.json?.abTests ?? []).find((t) => t.id === abTest2.id);
+    stored?.status === "COMPLETED" && stored?.winningVariant === "swapped"
+      ? ok("campaign detail carries the verdict back - the row, not the response, holds the decision")
+      : bad("verdict read back", JSON.stringify({ status: stored?.status, winningVariant: stored?.winningVariant }));
+
+    const postCompleteEnrollment = await mkAndEnroll(sequenceCId, campaign2Id);
+    !postCompleteEnrollment?.abVariant
+      ? ok("a completed test assigns nothing to new contacts - cohorts stay the size the winner was decided on")
+      : bad("completed test assigns no arms", JSON.stringify(postCompleteEnrollment?.abVariant));
 
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);

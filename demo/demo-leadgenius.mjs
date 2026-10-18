@@ -17,13 +17,14 @@
 //
 // Then step [10] asks the question the campaign review actually asks — which
 // channel earned those replies — through
-// GET /api/analytics/{workspaceId}?type=attribution. First the demo posts what
-// a real ESP posts: a signed `event=sent` callback per message, because that
-// provider event — never the app's own SentMessage row — is what feeds the
-// `sent` counter. Then the raw Activity fold must agree with the materialized
-// daily rollup (the drift check), the channel rows must sum exactly to the
-// headline, and the A/B variant table must be honestly empty while no test is
-// running — the read reports what it has, never more.
+// GET /api/analytics/{workspaceId}?type=attribution. The app records its own
+// SENT activity the moment a send succeeds, so the demo also posts what a
+// real ESP posts — five signed `event=sent` callbacks — and the guard must
+// absorb every one of them: the headline stays 5, not 10. Then the raw
+// Activity fold must agree with the materialized daily rollup (the drift
+// check), the channel rows must sum exactly to the headline, and the A/B
+// variant table must be honestly empty while no test is running — the read
+// reports what it has, never more.
 //
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
@@ -427,23 +428,23 @@ async function main() {
       ? ok("Maya enrollment COMPLETED after the last step")
       : bad("Maya enrollment COMPLETED", `status ${mayaEnr.json?.status}`);
     const mayaActivities = (mayaEnr.json?.activities || []).map((a) => a.type);
-    mayaActivities.length === 0
-      ? ok("Maya activity trail: no inbound events (nothing replied or bounced)")
+    mayaActivities.length === 2 && mayaActivities.every((t) => t === "SENT")
+      ? ok("Maya activity trail: two self-recorded SENT rows, no inbound events", mayaActivities.join(","))
       : bad("Maya activity trail", JSON.stringify(mayaActivities));
     const priyaFull = await api(`/api/enrollments/${priyaEnrId}`);
     const priyaActivities = (priyaFull.json?.activities || []).map((a) => a.type);
-    priyaActivities.includes("BOUNCED")
-      ? ok("Priya activity trail records BOUNCED", priyaActivities.join(","))
+    priyaActivities.includes("BOUNCED") && priyaActivities.includes("SENT")
+      ? ok("Priya activity trail records her send and the bounce", priyaActivities.join(","))
       : bad("Priya activity trail", JSON.stringify(priyaActivities));
     const danielFull = await api(`/api/enrollments/${danielEnrId}`);
     const danielActivities = (danielFull.json?.activities || []).map((a) => a.type);
-    danielActivities.includes("REPLIED")
-      ? ok("Daniel activity trail records REPLIED", danielActivities.join(","))
+    danielActivities.includes("REPLIED") && danielActivities.includes("SENT")
+      ? ok("Daniel activity trail records his send and the reply", danielActivities.join(","))
       : bad("Daniel activity trail", JSON.stringify(danielActivities));
     const raviFull = await api(`/api/enrollments/${raviEnrId}`);
     const raviActivities = (raviFull.json?.activities || []).map((a) => a.type);
-    raviActivities.includes("REPLIED")
-      ? ok("Ravi activity trail records REPLIED", raviActivities.join(","))
+    raviActivities.includes("REPLIED") && raviActivities.includes("SENT")
+      ? ok("Ravi activity trail records his email send and the WhatsApp reply", raviActivities.join(","))
       : bad("Ravi activity trail", JSON.stringify(raviActivities));
 
     // ----------------------------------------------------- personalization --
@@ -525,12 +526,11 @@ async function main() {
     }
 
     // ------------------------------------------------------------ attribution --
-    // A real provider does not only post bounces: Mailgun/Postmark/SES post a
-    // `sent`/`accepted` event for every message too, and that provider event —
-    // never our own SentMessage row — is what makes the `sent` counter in both
-    // analytics engines. Until the demo posts them, attribution honestly
-    // reports sent:0, which is exactly what the table holds.
-    console.log("\n[10] the provider's sent events, then attribution: which channel earned the replies — and whether the two engines agree");
+    // The app records its own SENT activity the moment a send succeeds
+    // (queue.ts), and the email webhook guards provider sent/accepted events
+    // against that row. So posting a full set of ESP-style sent callbacks here
+    // is the double-count proof: the headline must stay 5, not become 10.
+    console.log("\n[10] provider sent events (corroborate, never double-count), then attribution");
     const sentEvents = [];
     for (const target of ["maya.chen", "priya.raman", "daniel.okafor", "ravi.patel"]) {
       for (const m of msgsTo(target)) {
@@ -539,7 +539,7 @@ async function main() {
       }
     }
     sentEvents.length === 5 && sentEvents.every(Boolean)
-      ? ok("signed sent-callback accepted for every message", "5 × event=sent provider=mailgun → SENT activities")
+      ? ok("5 × signed sent-callback accepted — and guarded, not inserted", "event=sent provider=mailgun on messages the worker already recorded")
       : bad("signed sent-callbacks", `${sentEvents.filter(Boolean).length}/${sentEvents.length} accepted`);
     const wsIdForAttr = (await api(`/api/campaigns/${campaignId}`)).json?.workspaceId;
     if (!wsIdForAttr) throw new Error("workspace id missing from campaign read — attribution needs it");
@@ -549,7 +549,7 @@ async function main() {
     }, { timeout: 30000, label: "attribution agreeing with the daily rollup" });
     attr ? ok("drift empty: the raw fold and the materialized day agree") : bad("attribution rollup agreement");
     const aTotals = attr?.totals ?? {};
-    aTotals.sent === 5 ? ok("attribution: 5 SENT activities fold to the headline", `sent=${aTotals.sent}`) : bad("attribution sent", JSON.stringify(aTotals));
+    aTotals.sent === 5 ? ok("attribution: 5 SENT — the worker's own rows; the provider's 5 sent events were absorbed by the guard", `sent=${aTotals.sent}`) : bad("attribution sent", JSON.stringify(aTotals));
     aTotals.replied === 2 ? ok("attribution: 2 replies — one LinkedIn, one WhatsApp") : bad("attribution replied", JSON.stringify(aTotals));
     aTotals.bounced === 1 ? ok("attribution: the bounce is counted too") : bad("attribution bounced", JSON.stringify(aTotals));
     const byCh = Object.fromEntries((attr?.byChannel ?? []).map((r) => [r.key, r]));

@@ -38,7 +38,7 @@ post_code() { local url="$1"; shift; curl -s -o /dev/null -w '%{http_code}' --ma
 is_4xx() { [ "${1:-000}" -ge 400 ] 2>/dev/null && [ "${1:-000}" -lt 500 ]; }
 is_ok_or_redirect() { case "${1:-000}" in 2??|30?) return 0 ;; *) return 1 ;; esac; }
 
-# Discovery files every shipped app host carries (the llms/robots PRs).
+# Discovery files every shipped app host carries (the llms/robots/sitemap PRs).
 # /llms.txt is the machine-readable index; /robots.txt must serve and — where
 # it is a static public/ file — point at the index. Route-based robots (pdf,
 # hub) can't carry comment lines, so the pointer check is skipped there.
@@ -62,6 +62,30 @@ check_discovery() {
     fi
   else
     ok 'robots.txt serves' 'robots.txt → 200 (route-based)'
+  fi
+  check_sitemap "$base"
+}
+
+# Every published app host must tell crawlers where its pages are. A sitemap
+# that 404s or serves an empty urlset is the quiet half of the same failure as
+# a dangling link card: nothing breaks in a browser, and search/AI discovery
+# silently loses the pricing page.
+check_sitemap() {
+  local base="$1" c b n
+  c=$(get_code "$base/sitemap.xml"); b=$(get_body "$base/sitemap.xml")
+  if [ "$c" != 200 ]; then
+    bad 'sitemap.xml serves' "sitemap.xml → $c"
+    return
+  fi
+  if ! printf '%s' "$b" | grep -q '<urlset'; then
+    bad 'sitemap.xml is a urlset' 'served but no <urlset>'
+    return
+  fi
+  n=$(printf '%s' "$b" | grep -c '<loc>' || true)
+  if [ "$n" -lt 1 ]; then
+    bad 'sitemap.xml lists pages' 'served but no <loc>'
+  else
+    ok 'sitemap.xml serves the page list' "sitemap → 200, $n urls"
   fi
 }
 

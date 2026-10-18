@@ -37,6 +37,20 @@ kill_port() {
   if [ -n "${pid:-}" ]; then kill "$pid" 2>/dev/null || true; fi
 }
 
+# Prisma 7's CLI no longer loads .env, but the Next app does. A CLI command
+# (seed, seed:key, db:seed) run without the app's env writes to the fallback
+# database while the app reads .env — the demo then gets 401s from a key that
+# exists somewhere else. Run those commands in the app's own environment.
+with_app_env() {
+  local dir="$1"; shift
+  (
+    cd "$dir"
+    if [ -f .env ]; then set -a; . ./.env; set +a; fi
+    if [ -f .env.local ]; then set -a; . ./.env.local; set +a; fi
+    "$@"
+  )
+}
+
 case "$NAME" in
   connect)
     echo "── demo: connect — ranked omnichannel inbox ──"
@@ -77,7 +91,7 @@ if [ "$NAME" = "chain" ]; then
   # cleanly and prints the one-time API key, which is the only copy that will
   # ever exist (it is stored hashed).
   CONNECT_DIR="$REPOS_DIR/aw-abetConnect"
-  SEED_OUT="$(cd "$CONNECT_DIR" && npm run seed 2>&1)" || true
+  SEED_OUT="$(with_app_env "$CONNECT_DIR" npm run seed 2>&1)" || true
   CONNECT_KEY="$(printf '%s\n' "$SEED_OUT" | grep -oE 'API key \(shown once\): [A-Za-z0-9_-]+' | tail -1 | awk '{print $NF}')"
   if [ -z "${CONNECT_KEY:-}" ]; then
     echo "connect seed did not yield an API key — tail of its output:" >&2
@@ -90,7 +104,7 @@ fi
 if [ "$NAME" = "admissions" ] || [ "$NAME" = "clinic" ]; then
   # Second app for these demos: Flow runs the workflow the event wakes. Its
   # key is minted the same way every other app's is.
-  FLOW_KEY="$(cd "$REPOS_DIR/aw-abetflow" && npm run seed:key 2>&1 | grep -oE '[a-z]{2}_live_[A-Za-z0-9_-]+' | tail -1 || true)"
+  FLOW_KEY="$(with_app_env "$REPOS_DIR/aw-abetflow" npm run seed:key 2>&1 | grep -oE '[a-z]{2}_live_[A-Za-z0-9_-]+' | tail -1 || true)"
   if [ -z "${FLOW_KEY:-}" ]; then
     echo "could not mint the flow API key (npm run seed:key in aw-abetflow)" >&2
     exit 1
@@ -101,7 +115,7 @@ fi
 if [ "$NAME" = "agent" ]; then
   # The story is the state `npm run db:seed` installs — the Support Agent and
   # its Support handbook. Re-running it is idempotent and prints the ids.
-  AGENT_SEED_LOG="$(cd "$REPOS_DIR/aw-abetagent" && npm run db:seed 2>&1)" || {
+  AGENT_SEED_LOG="$(with_app_env "$REPOS_DIR/aw-abetagent" npm run db:seed 2>&1)" || {
     echo "agent seed failed (npm run db:seed in aw-abetagent) — tail:" >&2
     printf '%s\n' "$AGENT_SEED_LOG" | tail -15 >&2
     exit 1
@@ -157,7 +171,7 @@ if [ "$NAME" = "admissions" ] || [ "$NAME" = "clinic" ]; then
 fi
 echo
 
-KEY="$(cd "$REPOS_DIR/$APP" && npm run seed:key 2>&1 | grep -oE '[a-z]{2}_live_[A-Za-z0-9_-]+' | tail -1 || true)"
+KEY="$(with_app_env "$REPOS_DIR/$APP" npm run seed:key 2>&1 | grep -oE '[a-z]{2}_live_[A-Za-z0-9_-]+' | tail -1 || true)"
 if [ -z "$KEY" ]; then
   echo "could not mint an API key (npm run seed:key) — is the app migrated + seeded?" >&2
   exit 1

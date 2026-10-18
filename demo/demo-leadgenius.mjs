@@ -26,6 +26,12 @@
 // variant table must be honestly empty while no test is running — the read
 // reports what it has, never more.
 //
+// Step [11] then makes that empty table real: an A/B test created RUNNING on
+// the same campaign, fresh contacts enrolled through the plain enroll route,
+// and each arm checked against the hash the app computes — the demo re-runs
+// the arithmetic itself. The B arm's message actually carries the B subject,
+// and attribution's byVariant shows both arms counting their own sends.
+//
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
@@ -562,6 +568,159 @@ async function main() {
       : bad("variant table with no test", JSON.stringify(attr?.byVariant));
     const chSum = (attr?.byChannel ?? []).reduce((n, r) => n + r.replied, 0);
     chSum === aTotals.replied ? ok("channel replies sum exactly to the headline — a breakdown cannot invent a reply") : bad("channel sum vs headline", `${chSum} vs ${aTotals.replied}`);
+
+    // ------------------------------------------------------- A/B assignment --
+    // The writer the schema always modeled but never had. A test arrives
+    // RUNNING, and every later enroll lands in the arm that
+    // sha256(abTestId:contactId) says it must — so the demo re-computes the
+    // hash itself and demands the app agree, contact by contact. It keeps
+    // enrolling until both arms have people, then shows the override reaching
+    // the actual message subject and attribution's byVariant table — honestly
+    // empty in [10] — becoming real.
+    console.log("\n[11] A/B test: deterministic assignment makes byVariant real");
+
+    const sumBad = await api("/api/abtests", {
+      method: "POST",
+      body: {
+        campaignId,
+        name: "should not be created",
+        hypothesis: "weights are checked at the boundary",
+        variants: [
+          { name: "a", weight: 60, isControl: true, sequenceId },
+          { name: "b", weight: 60, isControl: false, sequenceId },
+        ],
+      },
+    });
+    sumBad.status === 400 && /sum to 100, got 120/.test(sumBad.json?.error ?? "")
+      ? ok("weights summing to 120 refused at creation", sumBad.json?.error)
+      : bad("weights sum refused", `HTTP ${sumBad.status} ${JSON.stringify(sumBad.json)}`);
+
+    const seqBad = await api("/api/abtests", {
+      method: "POST",
+      body: {
+        campaignId,
+        name: "should not be created",
+        hypothesis: "an id is a claim that a row exists",
+        variants: [
+          { name: "a", weight: 50, isControl: true, sequenceId },
+          { name: "b", weight: 50, isControl: false, sequenceId: "000000000000000000000000000ff000" },
+        ],
+      },
+    });
+    seqBad.status === 400 && /does not exist in this workspace/.test(seqBad.json?.error ?? "")
+      ? ok("variant naming a foreign sequence refused", seqBad.json?.error)
+      : bad("foreign sequence refused", `HTTP ${seqBad.status} ${JSON.stringify(seqBad.json)}`);
+
+    const tB = await api("/api/templates", {
+      method: "POST",
+      body: {
+        name: "Ridgeview two ideas",
+        channel: "EMAIL",
+        subject: "{{firstName}} - two ideas for {{company}}",
+        body: "<p>Hi {{firstName}},</p><p>Two concrete ideas for {{company}}: (1) put the quote-to-delivery handoff on one board, (2) alert when a job sits untouched for a day. Both start with a 15-minute look.</p><p>- Sam, Ridgeview Software</p>",
+      },
+    });
+    const tBId = pickId(tB.json, "template");
+    tBId ? ok("second template created for the B arm", tBId) : bad("second template created", `HTTP ${tB.status}`);
+
+    const seqB = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Ridgeview two-ideas (one step)",
+        channel: "EMAIL",
+        campaignId,
+        stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: tBId, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const sequenceBId = pickId(seqB.json, "sequence");
+    sequenceBId ? ok("second sequence created for the B arm", sequenceBId) : bad("second sequence created", JSON.stringify(seqB.json).slice(0, 200));
+
+    const ab = await api("/api/abtests", {
+      method: "POST",
+      body: {
+        campaignId,
+        name: "Quick question vs two ideas",
+        hypothesis: "Two concrete ideas beat one abstract promise",
+        variants: [
+          { name: "control", weight: 50, isControl: true, sequenceId },
+          { name: "two_ideas", weight: 50, isControl: false, sequenceId: sequenceBId },
+        ],
+      },
+    });
+    const abTest = ab.json?.abTest;
+    ab.status === 201 && abTest?.id ? ok("A/B test created", abTest.name) : bad("A/B test created", `HTTP ${ab.status} ${JSON.stringify(ab.json).slice(0, 200)}`);
+    abTest?.status === "RUNNING" && abTest?.variants?.length === 2
+      ? ok("test arrives RUNNING with both variant rows - no draft state to click through")
+      : bad("test shape", JSON.stringify({ status: abTest?.status, variants: abTest?.variants?.length }));
+
+    // The same arithmetic src/lib/abtest.ts performs, done independently here:
+    // same salt, same hex window, same modulo, same cumulative order (the route
+    // hands assignVariant its variants orderBy name, and the create response
+    // carries them in exactly that order).
+    const predictArm = (testId, contactId) => {
+      const vars = abTest.variants;
+      const total = vars.reduce((n, v) => n + v.weight, 0);
+      const bucket = parseInt(crypto.createHash("sha256").update(`${testId}:${contactId}`).digest("hex").slice(0, 8), 16) % total;
+      let acc = 0;
+      for (const v of vars) {
+        acc += v.weight;
+        if (bucket < acc) return v.name;
+      }
+      return vars[vars.length - 1].name;
+    };
+
+    const pool = [
+      { first: "Nora", last: "Fields", company: "Veldt Freight", title: "COO" },
+      { first: "Theo", last: "Marsh", company: "Kettleworks", title: "VP Delivery" },
+      { first: "Ines", last: "Duval", company: "Asterym Retail", title: "Head of Ops" },
+      { first: "Kofi", last: "Mensah", company: "Portside Gear", title: "Director" },
+      { first: "Lena", last: "Brandt", company: "Ferrolane Mills", title: "COO" },
+      { first: "Amit", last: "Shah", company: "Tallow Hill", title: "VP Ops" },
+      { first: "Rosa", last: "Delgado", company: "Quill and Ledger", title: "Owner" },
+      { first: "Ben", last: "Arkady", company: "Nine Bar Freight", title: "GM" },
+    ];
+    const assigned = [];
+    for (const p of pool) {
+      if (new Set(assigned.map((a) => a.got)).size === 2) break;
+      const email = `${p.first.toLowerCase()}.${p.last.toLowerCase()}@ab.${RUN.slice(-6)}.dev`;
+      const cid = await mkContact({ email, firstName: p.first, lastName: p.last, company: p.company, title: p.title });
+      const enr = await api("/api/enrollments", { method: "POST", body: { contactId: cid, sequenceId, campaignId } });
+      assigned.push({
+        email,
+        expected: predictArm(abTest.id, cid),
+        got: enr.json?.enrollment?.abVariant?.name,
+        appliedSequenceId: enr.json?.enrollment?.sequenceId,
+      });
+    }
+    const arms = (name) => assigned.filter((a) => a.got === name);
+    assigned.every((a) => a.got === a.expected) && assigned.length >= 2
+      ? ok(`every enroll carried the arm its hash predicts, re-computed in the demo`, assigned.map((a) => a.got).join(","))
+      : bad("arm assignment matches prediction", JSON.stringify(assigned.map((a) => [a.expected, a.got])));
+    arms("control").length >= 1 && arms("two_ideas").length >= 1
+      ? ok(`both arms populated within the pool (${arms("control").length} control, ${arms("two_ideas").length} two_ideas)`)
+      : bad("both arms populated", JSON.stringify(assigned.map((a) => a.got)));
+    assigned.every((a) => a.appliedSequenceId === (a.got === "two_ideas" ? sequenceBId : sequenceId))
+      ? ok("two_ideas enrollments were overridden to the B sequence; control kept the requested one")
+      : bad("arm sequence override", JSON.stringify(assigned.map((a) => [a.got, a.appliedSequenceId])));
+
+    const newMails = await waitFor(() => {
+      const got = assigned.map((a) => msgsTo(a.email)[0]).filter(Boolean);
+      return got.length === assigned.length ? got : null;
+    }, { timeout: 60000, label: "each A/B contact's first email" });
+    const subjectFor = (a) => msgsTo(a.email)[0]?.subject ?? "";
+    newMails && assigned.every((a) => subjectFor(a).includes(a.got === "control" ? "quick question" : "two ideas"))
+      ? ok("each new contact received the SUBJECT OF ITS ARM - the override reaches the message, not just the row", subjectFor(arms("two_ideas")[0] ?? assigned[0]))
+      : bad("arm subject provenance", JSON.stringify(assigned.map((a) => subjectFor(a))));
+
+    const attr2 = await waitFor(async () => {
+      const a = await api(`/api/analytics/${wsIdForAttr}?type=attribution&days=1`);
+      return a.json?.drift?.length === 0 && (a.json?.byVariant ?? []).length === 2 ? a.json : null;
+    }, { timeout: 60000, label: "attribution showing both arms" });
+    attr2 ? ok("drift still empty: the arm rows roll up in sync with the materialized day") : bad("attribution with arms");
+    const vRows = Object.fromEntries((attr2?.byVariant ?? []).map((r) => [r.key, r]));
+    vRows.control?.sent >= arms("control").length && vRows.two_ideas?.sent >= arms("two_ideas").length
+      ? ok("byVariant is real now: each arm has counted at least its own step-1 sends", `control=${vRows.control?.sent} two_ideas=${vRows.two_ideas?.sent}`)
+      : bad("byVariant rows", JSON.stringify(attr2?.byVariant));
 
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);

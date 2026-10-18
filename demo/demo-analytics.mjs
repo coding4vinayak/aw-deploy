@@ -5,8 +5,9 @@
 //   - "weekly revenue < 5,000"  → the revenue snapshot breaches it → alert fires
 //   - "cart adds < 50"          → the healthy metric stays silent
 // Every delivery (snapshot.created, alert.triggered, and the rule's own
-// webhook) is signature-verified in-process, and the week's movement is
-// split by channel with the frozen snapshot's own definition.
+// webhook) is signature-verified in-process, the week's movement is split by
+// channel with the frozen snapshot's own definition, and the frozen number is
+// handed out as a revocable read-only link (STEP 9, the only PASS/FAIL step).
 //
 // Re-runnable: metric names + event types carry a per-run suffix so a second
 // run computes exactly the same 3,820 / 214 numbers.
@@ -107,5 +108,42 @@ for (const r of bd.body.breakdown ?? []) {
   log(`  ${r.segment.padEnd(10)} now ${String(r.current).padStart(5)}  was ${String(r.previous).padStart(5)}  ${d >= 0 ? "+" : ""}${d}`);
 }
 log(`  headline is still ${sA.body.headline} — under the 5,000 floor — but the movement now has names: Instagram and Google carried the week, Email bled.`);
+
+// STEP 9 is the only step with PASS/FAIL checks: it is the one whose claim
+// ("the board can be handed the number without a login") is a security
+// property, not a log line. A failed check exits non-zero.
+log("\n═══ STEP 9 — the frozen number leaves the building (read-only share link) ═══");
+let failures = 0;
+const check = (label, ok, detail = "") => {
+  log(`  ${ok ? "PASS" : "FAIL"}  ${label}${detail ? `  — ${detail}` : ""}`);
+  if (!ok) failures += 1;
+};
+
+const snapshotId = sA.body.snapshot.id;
+const share1 = await post(`/snapshots/${snapshotId}/share`, {});
+const token = share1.body.token;
+check("mint returns 201 with a token", share1.status === 201 && typeof token === "string" && token.length > 20, `status=${share1.status}`);
+check("the returned URL ends with the token's path", String(share1.body.url).endsWith(`/s/${token}`), share1.body.url);
+
+const share2 = await post(`/snapshots/${snapshotId}/share`, {});
+check("re-sharing is idempotent — 200, same token", share2.status === 200 && share2.body.token === token, `status=${share2.status}`);
+
+const link = `${APP_BASE}/s/${token}`;
+const page = await fetch(link);
+const html = await page.text();
+check("the public page opens with no key", page.status === 200, `status=${page.status}`);
+check("it shows the frozen headline", html.replace(/,/g, "").includes(String(sA.body.headline)), `headline=${sA.body.headline}`);
+check("it carries the definition as-run", html.includes("Definition, as run"));
+check("it is noindex — a link is a capability, not a post", html.includes("noindex"));
+check("it names no tenant", !html.includes("Demo Workspace") && !/workspaceId/i.test(html));
+
+const revoke = await fetch(`${API}/snapshots/${snapshotId}/share`, { method: "DELETE", headers: H });
+check("revoke answers revoked:true", revoke.status === 200 && (await revoke.json()).revoked === true, `status=${revoke.status}`);
+check("the same link 404s after revoke", (await fetch(link)).status === 404);
+log(`  the read-only link, now revoked: ${link}`);
+if (failures) {
+  log(`\n${failures} check(s) FAILED`);
+  process.exitCode = 1;
+}
 
 await capture.close();

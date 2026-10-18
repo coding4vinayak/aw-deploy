@@ -71,7 +71,7 @@ check_discovery() {
 # a dangling link card: nothing breaks in a browser, and search/AI discovery
 # silently loses the pricing page.
 check_sitemap() {
-  local base="${1%/}" c b n off
+  local base="${1%/}" c b n off urls url dead total first
   c=$(get_code "$base/sitemap.xml"); b=$(get_body "$base/sitemap.xml")
   if [ "$c" != 200 ]; then
     bad 'sitemap.xml serves' "sitemap.xml → $c"
@@ -81,7 +81,8 @@ check_sitemap() {
     bad 'sitemap.xml is a urlset' 'served but no <urlset>'
     return
   fi
-  n=$(printf '%s' "$b" | grep -c '<loc>' || true)
+  urls=$(printf '%s' "$b" | tr -d '\n\r' | grep -oE '<loc>[^<]+</loc>' | sed -E 's#</?loc>##g')
+  n=$(printf '%s' "$urls" | grep -c . || true)
   if [ "$n" -lt 1 ]; then
     bad 'sitemap.xml lists pages' 'served but no <loc>'
     return
@@ -90,12 +91,28 @@ check_sitemap() {
   # copy-paste failure the per-app static files make easy. Every URL must
   # belong to the host being checked, or search engines are told to index
   # pages that live somewhere else.
-  off=$(printf '%s' "$b" | tr -d '\n\r' | grep -oE '<loc>[^<]+</loc>' \
-    | sed -E 's#</?loc>##g' | awk -v p="$base/" 'index($0,p)!=1' | wc -l)
+  off=$(printf '%s' "$urls" | awk -v p="$base/" 'index($0,p)!=1' | grep -c . || true)
   if [ "$off" -gt 0 ]; then
     bad 'sitemap.xml lists this host' "$off of $n urls do not start with $base/"
+    return
+  fi
+  ok 'sitemap.xml serves the page list' "sitemap → 200, $n urls, all on $base"
+  # ... and every promised page must resolve. A sitemap full of 404s spends
+  # crawl budget on dead ends and hides the page that should rank.
+  dead=0; total=0; first=""
+  while IFS= read -r url; do
+    [ -z "$url" ] && continue
+    total=$((total + 1))
+    c=$(get_code "$url")
+    if ! is_ok_or_redirect "$c"; then
+      dead=$((dead + 1))
+      [ -z "$first" ] && first="$url → $c"
+    fi
+  done <<< "$urls"
+  if [ "$dead" -gt 0 ]; then
+    bad 'sitemap.xml pages resolve' "$dead of $total dead (first: $first)"
   else
-    ok 'sitemap.xml serves the page list' "sitemap → 200, $n urls, all on $base"
+    ok 'sitemap.xml pages resolve' "$total/$total → 2xx/3xx"
   fi
 }
 

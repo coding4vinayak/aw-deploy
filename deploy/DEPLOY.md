@@ -88,12 +88,18 @@ DATABASE_URL='<same>'                       npm run seed:key    # prints the roo
 ```
 
 ```bash
-bash deploy/smoke-test.sh   # / /api/health /pricing /robots.txt /llms.txt on every host
+bash deploy/smoke-test.sh            # is every host up? — status codes
+bash deploy/acceptance/acceptance.sh # does it behave? — gates, 4xx on junk, honest copy
 ```
 
 **Grade:** every app's `/api/health` returns `{"ok":true,"db":"up"}`.
 A **503** means DB/migrations are wrong — and because the blueprint makes
 `/api/health` the health check, traffic never switched to that deploy.
+`acceptance.sh` then grades *behavior* from the outside: dashboard routes gate
+anonymous visitors, billing webhooks reject unsigned and forged payloads (4xx,
+never 2xx/5xx), abetapi refuses anonymous callers and publishes its contract,
+abetflow webhooks refuse a wrong secret, and the hub's `/llms.txt` keeps its
+honesty line. Exit 0 or it names the failing host and check.
 
 Then the sales walk, per paid app in a fresh private window:
 
@@ -114,7 +120,7 @@ vars, re-run the smoke sweep — then the suite is sellable.
 3. **Hub blueprint import** (§2).
 4. **Stripe** products in test mode (§3) — the import prompts for the IDs.
 5. **DNS + purge** (§4).
-6. **`deploy/smoke-test.sh`** + the sales walk (§5). Flip Stripe to live.
+6. **`deploy/smoke-test.sh`** + **`deploy/acceptance/acceptance.sh`** + the sales walk (§5). Flip Stripe to live.
 7. Re-run BlueRails and record the score.
 
 ## After launch: leads → consent → drip

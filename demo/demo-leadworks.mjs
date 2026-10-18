@@ -6,6 +6,7 @@
 //   4. a VALIDATE job writes the per-lead validation trail
 //   5. a DEDUPE sweep finds nothing left to merge
 //   6. the buyer's own CSV imports; the in-file duplicate and the bad email are named
+//      and the file the product exported re-imports with zero new rows
 //   7. every webhook delivery is signature-verified in-process
 //
 // Re-runnable: emails/phones carry a per-run suffix so a second run starts clean
@@ -84,9 +85,13 @@ for (let i = 0; i < 40; i++) {
   if (["COMPLETED", "FAILED"].includes(cur.status)) { done = cur; break; }
 }
 log(`  export ${exp.id}: ${done?.status ?? "still running"}  rows=${done?.recordCount ?? "?"}  bytes=${done?.fileSize ?? "?"}`);
+let exportedCsv = "";
+let exportedRows = 0;
 if (done?.status === "COMPLETED") {
   const csv = await (await fetch(`${API}/exports/${exp.id}/download`, { headers: H })).text();
-  log(`  CSV download: ${csv.split("\n")[0].slice(0, 100)}…  (${csv.trim().split("\n").length - 1} data rows)`);
+  exportedCsv = csv;
+  exportedRows = done.recordCount ?? (csv.trim().split("\n").length - 1);
+  log(`  CSV download: ${csv.split("\n")[0].slice(0, 100)}…  (${exportedRows} data rows)`);
 }
 
 log("\n═══ STEP 5 — validation trail (VALIDATE job) ═══");
@@ -139,6 +144,15 @@ const afterRows = after.items ?? after.leads ?? after.data ?? [];
 const importedIds = afterRows.filter((l) => (l.email ?? "").startsWith(`import.${RUN}.`)).map((l) => l.id);
 check(importedIds.length === 2, `the two imported leads are in the workspace list (${importedIds.length})`);
 log(`  every imported row emits lead.created — the next step verifies the two new deliveries too`);
+
+log("\n  round-trip — import the file the product just exported");
+const rtRes = await fetch(`${API}/leads/import`, { method: "POST", headers: csvHeaders, body: exportedCsv });
+const rt = await rtRes.json();
+log(`  POST /api/leads/import (the exported CSV) -> ${rtRes.status}  imported=${rt.imported}  already in the workspace=${rt.duplicatesExisting}  invalid=${rt.invalid}`);
+check(
+  exportedRows > 0 && rtRes.status === 200 && rt.imported === 0 && rt.total === exportedRows && rt.duplicatesExisting === exportedRows && rt.invalid === 0,
+  `export → import: 200, 0 new, all ${exportedRows} already present, 0 invalid`,
+);
 
 await new Promise((r) => setTimeout(r, 1200));
 log("\n═══ STEP 8 — everything the wire carried (signatures re-computed here) ═══");

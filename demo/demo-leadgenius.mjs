@@ -8,10 +8,22 @@
 //   demo/run-demo.sh leadgenius
 //
 // Story: one two-step email sequence (intro → follow-up guarded by no_reply),
-// three prospects:
+// four prospects:
 //   - Maya   : no reply       → intro + follow-up, enrollment COMPLETED, signed webhook
 //   - Priya  : bounce callback → sequence stops (BOUNCED), exactly one email
 //   - Daniel : reply callback  → sequence stops (REPLIED), exactly one email
+//   - Ravi   : WhatsApp reply  → sequence stops (REPLIED), one email, reply on
+//              a *different* channel than the one that sent
+//
+// Then step [10] asks the question the campaign review actually asks — which
+// channel earned those replies — through
+// GET /api/analytics/{workspaceId}?type=attribution. First the demo posts what
+// a real ESP posts: a signed `event=sent` callback per message, because that
+// provider event — never the app's own SentMessage row — is what feeds the
+// `sent` counter. Then the raw Activity fold must agree with the materialized
+// daily rollup (the drift check), the channel rows must sum exactly to the
+// headline, and the A/B variant table must be honestly empty while no test is
+// running — the read reports what it has, never more.
 //
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
@@ -273,6 +285,15 @@ async function main() {
       title: "CTO",
       linkedinUrl: "https://www.linkedin.com/in/daniel-okafor-ridgeview-demo",
     });
+    const RAVI_PHONE = `+1555${RUN.slice(-4)}`;
+    const raviId = await mkContact({
+      email: `ravi.patel@sunmere-logistics.${RUN.slice(-4)}.dev`,
+      phone: RAVI_PHONE,
+      firstName: "Ravi",
+      lastName: "Patel",
+      company: "Sunmere Logistics",
+      title: "Head of Sales",
+    });
 
     // ----------------------------------------------------- negative test --
     console.log("\n[2] signed inbound callbacks: reject garbage, accept only the real signature");
@@ -357,14 +378,49 @@ async function main() {
     }, { timeout: 20000, label: "Daniel enrollment REPLIED" });
     ok("Daniel enrollment flipped to REPLIED");
 
+    // --------------------------------------------- Ravi (WhatsApp reply) --
+    console.log("\n[5b] Ravi (reply via the WhatsApp channel): Twilio-shaped signed callback; sequence must stop");
+    const enrollRavi = await api("/api/enrollments", { method: "POST", body: { contactId: raviId, sequenceId, campaignId } });
+    const raviEnrId = enrollRavi.json?.enrollment?.id;
+    raviEnrId ? ok("Ravi enrolled", raviEnrId) : bad("Ravi enrolled", JSON.stringify(enrollRavi.json).slice(0, 200));
+    const raviStep1 = await waitFor(() => {
+      const m = msgsTo("ravi.patel");
+      return m.length >= 1 ? m : null;
+    }, { label: "Ravi step 1 in the SMTP sink" });
+    ok("Ravi step 1 delivered over real SMTP", `subject "${raviStep1[0].subject}"`);
+    // Twilio posts x-www-form-urlencoded, not JSON — the demo posts the same
+    // shape, over the same HMAC the provider would.
+    const twilioRaw = new URLSearchParams({
+      MessageSid: `SMridgeview${RUN}`,
+      From: `whatsapp:${RAVI_PHONE}`,
+      Body: "Yes to a call - WhatsApp works better than email for me.",
+    }).toString();
+    const twilioTs = String(Math.floor(Date.now() / 1000));
+    const twilioSig = crypto.createHmac("sha256", INBOUND_SECRET).update(`${twilioTs}.${twilioRaw}`).digest("hex");
+    const waReply = await fetch(`${BASE}/api/webhooks/whatsapp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "x-inbound-timestamp": twilioTs, "x-inbound-signature": twilioSig },
+      body: twilioRaw,
+    });
+    const waText = await waReply.text();
+    waReply.status === 200 && waText.includes("ok")
+      ? ok("signed WhatsApp reply callback accepted", "Twilio form-encoded → REPLIED on channel WHATSAPP")
+      : bad("signed WhatsApp reply callback accepted", `HTTP ${waReply.status} ${waText.slice(0, 120)}`);
+    await waitFor(async () => {
+      const r = await api(`/api/enrollments/${raviEnrId}`);
+      return r.json?.status === "REPLIED" ? r.json : null;
+    }, { timeout: 20000, label: "Ravi enrollment REPLIED" });
+    ok("Ravi enrollment flipped to REPLIED from the WhatsApp channel");
+
     // ------------------------------------------------------ quiet window --
     console.log("\n[6] proving silence: waiting through sweep ticks (75s) — no follow-ups may go out");
     await sleep(75000);
     const count = (e) => msgsTo(e).length;
-    const counts = { maya: count("maya.chen"), priya: count("priya.raman"), daniel: count("daniel.okafor") };
+    const counts = { maya: count("maya.chen"), priya: count("priya.raman"), daniel: count("daniel.okafor"), ravi: count("ravi.patel") };
     counts.maya === 2 ? ok("Maya: exactly intro + follow-up") : bad("Maya: exactly intro + follow-up", `got ${counts.maya}`);
     counts.priya === 1 ? ok("Priya: exactly 1 email — bounce stopped the sequence") : bad("Priya: exactly 1 email", `got ${counts.priya}`);
     counts.daniel === 1 ? ok("Daniel: exactly 1 email — reply stopped the sequence") : bad("Daniel: exactly 1 email", `got ${counts.daniel}`);
+    counts.ravi === 1 ? ok("Ravi: exactly 1 email — the WhatsApp reply stopped the sequence") : bad("Ravi: exactly 1 email", `got ${counts.ravi}`);
 
     const mayaEnr = await api(`/api/enrollments/${mayaEnrId}`);
     mayaEnr.json?.status === "COMPLETED"
@@ -384,6 +440,11 @@ async function main() {
     danielActivities.includes("REPLIED")
       ? ok("Daniel activity trail records REPLIED", danielActivities.join(","))
       : bad("Daniel activity trail", JSON.stringify(danielActivities));
+    const raviFull = await api(`/api/enrollments/${raviEnrId}`);
+    const raviActivities = (raviFull.json?.activities || []).map((a) => a.type);
+    raviActivities.includes("REPLIED")
+      ? ok("Ravi activity trail records REPLIED", raviActivities.join(","))
+      : bad("Ravi activity trail", JSON.stringify(raviActivities));
 
     // ----------------------------------------------------- personalization --
     console.log("\n[7] template merge vars rendered per contact");
@@ -409,14 +470,17 @@ async function main() {
       .filter((h) => h.body?.event);
     const completed = deliveries.find((h) => h.body.event === "sequence.completed" && h.body.data?.enrollmentId === mayaEnrId);
     const replyEvt = deliveries.find((h) => h.body.event === "reply.received" && h.body.data?.contactId === danielId);
+    const waEvt = deliveries.find((h) => h.body.event === "reply.received" && h.body.data?.channel === "WHATSAPP");
     completed ? ok("sequence.completed webhook delivered", completed.body.data.sequenceId) : bad("sequence.completed webhook delivered");
     replyEvt ? ok("reply.received webhook delivered", replyEvt.body.data.enrollmentId) : bad("reply.received webhook delivered");
-    deliveries.length === 2
-      ? ok("exactly 2 webhook deliveries — no event noise")
+    waEvt ? ok("reply.received webhook names the WhatsApp channel", waEvt.body.data.preview) : bad("reply.received webhook names WHATSAPP channel");
+    deliveries.length === 3
+      ? ok("exactly 3 webhook deliveries — no event noise")
       : bad("webhook delivery count", `got ${deliveries.length}: ${deliveries.map((d) => d.body.event).join(",")}`);
     for (const [h, label] of [
       [completed, "sequence.completed"],
       [replyEvt, "reply.received"],
+      [waEvt, "reply.received(whatsapp)"],
     ]) {
       if (!h) continue;
       const expected = crypto.createHmac("sha256", hookSecret).update(h.rawBody).digest("hex");
@@ -431,7 +495,7 @@ async function main() {
     // ----------------------------------------------------------- db truth --
     if (DATABASE_URL) {
       console.log("\n[9] database cross-check (provider message ids + statuses)");
-      const sql = `SELECT c.email, sm.status, sm."providerMessageId", e.status FROM "SentMessage" sm JOIN "Contact" c ON c.id=sm."contactId" JOIN "Enrollment" e ON e.id=sm."enrollmentId" WHERE sm."enrollmentId" IN ('${mayaEnrId}','${priyaEnrId}','${danielEnrId}') ORDER BY c.email, sm."sentAt"`;
+      const sql = `SELECT c.email, sm.status, sm."providerMessageId", e.status FROM "SentMessage" sm JOIN "Contact" c ON c.id=sm."contactId" JOIN "Enrollment" e ON e.id=sm."enrollmentId" WHERE sm."enrollmentId" IN ('${mayaEnrId}','${priyaEnrId}','${danielEnrId}','${raviEnrId}') ORDER BY c.email, sm."sentAt"`;
       const dbRows = execFileSync("psql", [DATABASE_URL, "-Atc", sql], { encoding: "utf8" })
         .trim()
         .split("\n")
@@ -450,12 +514,54 @@ async function main() {
       rowsFor("daniel.okafor").length === 1 && rowsFor("daniel.okafor")[0].status === "SENT" && rowsFor("daniel.okafor")[0].enrollmentStatus === "REPLIED"
         ? ok("DB: Daniel's message SENT, enrollment REPLIED")
         : bad("DB: Daniel rows", JSON.stringify(rowsFor("daniel.okafor")));
+      rowsFor("ravi.patel").length === 1 && rowsFor("ravi.patel")[0].status === "SENT" && rowsFor("ravi.patel")[0].enrollmentStatus === "REPLIED"
+        ? ok("DB: Ravi's message SENT, enrollment REPLIED")
+        : bad("DB: Ravi rows", JSON.stringify(rowsFor("ravi.patel")));
       const priyaDbId = rowsFor("priya.raman")[0]?.providerMessageId;
       const danielDbId = rowsFor("daniel.okafor")[0]?.providerMessageId;
       priyaDbId === priyaMsgId && danielDbId === danielStep1[0].messageId
         ? ok("provider message ids match between SMTP capture and DB", priyaDbId)
         : bad("provider id equality", `sink=${priyaMsgId}/${danielStep1[0].messageId} db=${priyaDbId}/${danielDbId}`);
     }
+
+    // ------------------------------------------------------------ attribution --
+    // A real provider does not only post bounces: Mailgun/Postmark/SES post a
+    // `sent`/`accepted` event for every message too, and that provider event —
+    // never our own SentMessage row — is what makes the `sent` counter in both
+    // analytics engines. Until the demo posts them, attribution honestly
+    // reports sent:0, which is exactly what the table holds.
+    console.log("\n[10] the provider's sent events, then attribution: which channel earned the replies — and whether the two engines agree");
+    const sentEvents = [];
+    for (const target of ["maya.chen", "priya.raman", "daniel.okafor", "ravi.patel"]) {
+      for (const m of msgsTo(target)) {
+        const ev = await inbound("/api/webhooks/email", { "message-id": m.messageId, event: "sent", timestamp: Math.floor(Date.now() / 1000) }, { extra: { "x-provider": "mailgun" } });
+        sentEvents.push(ev.status === 200 && ev.text.includes("ok"));
+      }
+    }
+    sentEvents.length === 5 && sentEvents.every(Boolean)
+      ? ok("signed sent-callback accepted for every message", "5 × event=sent provider=mailgun → SENT activities")
+      : bad("signed sent-callbacks", `${sentEvents.filter(Boolean).length}/${sentEvents.length} accepted`);
+    const wsIdForAttr = (await api(`/api/campaigns/${campaignId}`)).json?.workspaceId;
+    if (!wsIdForAttr) throw new Error("workspace id missing from campaign read — attribution needs it");
+    const attr = await waitFor(async () => {
+      const a = await api(`/api/analytics/${wsIdForAttr}?type=attribution&days=1`);
+      return a.json?.drift?.length === 0 ? a.json : null;
+    }, { timeout: 30000, label: "attribution agreeing with the daily rollup" });
+    attr ? ok("drift empty: the raw fold and the materialized day agree") : bad("attribution rollup agreement");
+    const aTotals = attr?.totals ?? {};
+    aTotals.sent === 5 ? ok("attribution: 5 SENT activities fold to the headline", `sent=${aTotals.sent}`) : bad("attribution sent", JSON.stringify(aTotals));
+    aTotals.replied === 2 ? ok("attribution: 2 replies — one LinkedIn, one WhatsApp") : bad("attribution replied", JSON.stringify(aTotals));
+    aTotals.bounced === 1 ? ok("attribution: the bounce is counted too") : bad("attribution bounced", JSON.stringify(aTotals));
+    const byCh = Object.fromEntries((attr?.byChannel ?? []).map((r) => [r.key, r]));
+    byCh.EMAIL?.sent === 5 && byCh.LINKEDIN?.replied === 1 && byCh.WHATSAPP?.replied === 1
+      ? ok("channel table is the story: email carried every send; the replies came on both other channels",
+          JSON.stringify(attr.byChannel.map((r) => `${r.key}:${r.sent}/${r.replied}`)))
+      : bad("channel table", JSON.stringify(attr?.byChannel));
+    (attr?.byVariant ?? []).length === 0
+      ? ok("variant table is honestly empty when no A/B test is running", "(no variant assignment exists yet)")
+      : bad("variant table with no test", JSON.stringify(attr?.byVariant));
+    const chSum = (attr?.byChannel ?? []).reduce((n, r) => n + r.replied, 0);
+    chSum === aTotals.replied ? ok("channel replies sum exactly to the headline — a breakdown cannot invent a reply") : bad("channel sum vs headline", `${chSum} vs ${aTotals.replied}`);
 
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);

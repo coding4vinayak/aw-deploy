@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Abetworks — Sales one-pager</title>
+<style>
+  :root {
+    --ink: #0f172a; --ink-2: #334155; --muted: #64748b;
+    --line: #e2e8f0; --paper: #f8fafc; --card: #ffffff;
+    --accent: #4f46e5; --accent-soft: #eef2ff;
+    --green-soft: #ecfdf5; --green-ink: #047857;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink); background: var(--paper);
+  }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f1f5f9; border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 22px 60px; }
+  .kicker { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: 30px; line-height: 1.15; letter-spacing: -0.02em; margin: 10px 0 10px; }
+  .lead { font-size: 16px; color: var(--ink-2); max-width: 62ch; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .chip { font-size: 12.5px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 5px 12px; }
+  .status { margin-top: 20px; background: var(--green-soft); border: 1px solid #a7f3d0; border-radius: 12px; padding: 12px 16px; font-size: 13.5px; color: #065f46; }
+  .status b { color: #064e3b; }
+  section { margin-top: 34px; }
+  h2 { font-size: 18px; letter-spacing: -0.01em; margin-bottom: 4px; }
+  .h2sub { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } h1 { font-size: 24px; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; page-break-inside: avoid; }
+  .card.wide { grid-column: 1 / -1; }
+  .head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .head h3 { font-size: 16.5px; }
+  .price { font-size: 14px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+  .price small { font-weight: 500; color: var(--muted); }
+  .promise { margin-top: 6px; color: var(--ink-2); font-size: 14px; }
+  .say { margin-top: 10px; font-size: 13px; color: var(--muted); font-style: italic; }
+  .proof { margin-top: 10px; font-size: 13.5px; color: var(--ink-2); border-top: 1px dashed var(--line); padding-top: 10px; }
+  .closer { margin-top: 8px; font-size: 13.5px; color: var(--green-ink); font-weight: 600; }
+  .free { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 720px) { .free { grid-template-columns: 1fr 1fr; } }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .two { grid-template-columns: 1fr; } }
+  ul { list-style: none; }
+  li { padding-left: 20px; position: relative; margin: 7px 0; font-size: 14px; color: var(--ink-2); }
+  li::before { content: "→"; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+  .honest { margin-top: 34px; border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; font-size: 12.5px; color: var(--muted); background: #fff; }
+  .honest b { color: var(--ink-2); }
+  footer { margin-top: 26px; font-size: 12.5px; color: var(--muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  @media print {
+    :root { --paper: #fff; --card: #fff; }
+    body { background: #fff; font-size: 12.5px; }
+    .wrap { max-width: none; padding: 0 4mm; }
+    h1 { font-size: 22px; }
+    section { margin-top: 18px; }
+    .chip { background: none; border: 1px solid var(--line); }
+    .status { background: none; }
+    .card { box-shadow: none; }
+    a { color: inherit; text-decoration: none; }
+  }
+  @page { margin: 12mm; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="kicker">Abetworks · working sales sheet · update after each deploy</div>
+    <h1>An AI-first business suite for emerging markets.</h1>
+    <p class="lead">Five standalone products you sell one at a time — and two <b>$0 connectors</b> that wire them together. Built for how India and emerging markets sell: WhatsApp-speed conversations, inbox-heavy teams, and owners who want the bad week while it's still this week.</p>
+    <div class="chips">
+      <span class="chip">14-day free trial</span>
+      <span class="chip">card at sign-up</span>
+      <span class="chip">cancel in the billing portal</span>
+      <span class="chip">annual = 2 months free, one invoice</span>
+    </div>
+  </header>
+
+  <div class="status">
+    <b>Honest status, say it plainly:</b> the public switch flips this week. The demos below run <b>today</b> on this machine against the real product (real database, real signatures) — run one on any call. Hosted trial links go live at deploy; send this sheet and the master plan now, trial links after.
+  </div>
+
+  <section>
+    <h2>The five you sell</h2>
+    <p class="h2sub">Each one: the sentence the buyer says, and the 30 seconds that prove it.</p>
+    <div class="grid">
+
+      <article class="card">
+        <div class="head"><h3>LeadWorks</h3><span class="price">$49/mo <small>· flat</small></span></div>
+        <p class="promise">Lead intake that refuses duplicates at the door and hands the desk a clean CSV.</p>
+        <p class="say">They say: “our lead lists are a mess — dupes, junk fields, exports that break.”</p>
+        <p class="proof">Prove it: <code>demo/run-demo.sh leadworks</code> — a duplicate refused <b>409</b> at the door, validation trail, dedupe sweep, signed <code>lead.created</code> / <code>export.completed</code> deliveries, CSV export.</p>
+      </article>
+
+      <article class="card">
+        <div class="head"><h3>LeadGenius</h3><span class="price">$29/user/mo <small>· per seat</small></span></div>
+        <p class="promise">Outbound sequences that respect a reply and a bounce — and prove every send.</p>
+        <p class="say">They say: “our cold email ends up in spam and we rotate inboxes by hand.”</p>
+        <p class="proof">Prove it: <code>demo/run-demo.sh leadgenius</code> — a 3-prospect sequence over real SMTP: a signed <b>bounce</b> stops contact one, a signed <b>reply</b> stops contact two, contact three completes; every outbound signature verified.</p>
+      </article>
+
+      <article class="card">
+        <div class="head"><h3>AbetAgent</h3><span class="price">$99/mo <small>· flat</small></span></div>
+        <p class="promise">An AI assistant whose work you can actually verify before you trust it.</p>
+        <p class="say">They say: “AI does the work but nobody can verify it.”</p>
+        <p class="proof">Show it in the product — every answer carries its <b>sources</b>; the <b>step trace</b> shows what the agent did; anything it shouldn't decide alone is <b>escalated to a person with its reasons</b>. No completed promise without evidence.</p>
+      </article>
+
+      <article class="card">
+        <div class="head"><h3>AbetConnect</h3><span class="price">$24/agent/mo <small>· per seat</small></span></div>
+        <p class="promise">Five channels, one inbox — ranked so the customer who matters comes first.</p>
+        <p class="say">They say: “five channels, zero idea who actually matters.”</p>
+        <p class="proof">Prove it: <code>demo/run-demo.sh connect</code> — 17 messages ranked 0–100: the 40-seat enquiry <b>100</b>, the marketing blast <b>0</b>.</p>
+      </article>
+
+      <article class="card wide">
+        <div class="head"><h3>AbetAnalytics</h3><span class="price">$19/mo <small>· flat</small></span></div>
+        <p class="promise">A revenue watchdog: frozen snapshots, rules that fire — and stay silent when they should.</p>
+        <p class="say">They say: “I don't see revenue problems until the month is closed.”</p>
+        <p class="proof">Prove it: <code>demo/run-demo.sh analytics</code> — one rule fires, one stays silent, alerts delivered <b>dual-signed</b> so you can verify them offline; then the week split by channel — Instagram <b>+750</b>, Google <b>+650</b>, Email <b>−180</b> — on top of the frozen <b>3,820</b>.</p>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Three cross-product stories — the strongest 10 minutes</h2>
+    <p class="h2sub">Two products each, wired together, every handoff signature-verified. Run these when the prospect's pain spans teams — that's most of them.</p>
+    <div class="grid">
+      <article class="card">
+        <div class="head"><h3>chain — Connect → Flow</h3><span class="price"><small>law firm intake</small></span></div>
+        <p class="promise">Five enquiries land; only the founder's urgent summons scores <b>HOT</b> and leaves the inbox into a Flow run that alerts the right person.</p>
+        <p class="proof">Run it: <code>demo/run-demo.sh chain</code></p>
+        <p class="closer">“Your tools should talk. Watch only the one that matters page a human.”</p>
+      </article>
+      <article class="card">
+        <div class="head"><h3>admissions — LeadWorks → Flow</h3><span class="price"><small>training institute</small></span></div>
+        <p class="promise">Duplicates refused; the tag decides the lane; the priority run alerts <b>and</b> writes <b>QUALIFIED</b> back to the lead.</p>
+        <p class="proof">Run it: <code>demo/run-demo.sh admissions</code></p>
+        <p class="closer">“The CRM updates itself; the counsellor just gets the alert.”</p>
+      </article>
+      <article class="card wide">
+        <div class="head"><h3>clinic — Analytics → Flow</h3><span class="price"><small>clinic, slow week</small></span></div>
+        <p class="promise">The week's cancellations trip a rule; Flow wakes the front desk with the number in the alert.</p>
+        <p class="proof">Run it: <code>demo/run-demo.sh clinic</code></p>
+        <p class="closer">“You hear about the bad week while it's still this week.”</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>The $0 half — say this out loud</h2>
+    <p class="h2sub">Free on purpose: they make the paid apps stickier and cost the customer nothing.</p>
+    <div class="free">
+      <article class="card"><div class="head"><h3>AbetFlow</h3><span class="price">$0</span></div><p class="promise">Workflow glue: inbound webhook → multi-step run → signed completion.</p></article>
+      <article class="card"><div class="head"><h3>AbetAPI</h3><span class="price">$0</span></div><p class="promise">Scoped keys, events, signed webhook deliveries, delivery log — and the NuCRM bridge.</p></article>
+      <article class="card"><div class="head"><h3>Hub</h3><span class="price">$0</span></div><p class="promise">35 free tools on top of the funnel, every suite link in one place.</p></article>
+      <article class="card"><div class="head"><h3>AbetPDF</h3><span class="price">$0</span></div><p class="promise">14 private PDF tools — files never leave the browser.</p></article>
+    </div>
+  </section>
+
+  <section>
+    <h2>What to send, when</h2>
+    <div class="two">
+      <article class="card">
+        <div class="head"><h3>Today</h3></div>
+        <ul>
+          <li>This sheet + the master plan — sendable links, no login.</li>
+          <li>A screen-share: run the matching <code>demo/run-demo.sh</code> or a cross-product story.</li>
+          <li>The buyer's sentence in the table above is the opener — use theirs, not ours.</li>
+        </ul>
+      </article>
+      <article class="card">
+        <div class="head"><h3>After the switch flips</h3></div>
+        <ul>
+          <li>Trial links per app: <code>analytics</code> · <code>leadworks</code> · <code>leadgenius</code> · <code>abetagent</code> · <code>connect</code> <code>.abetworks.in</code>.</li>
+          <li>14-day trial, card at sign-up, cancel in the portal — say it before they ask.</li>
+          <li>First reply: run the app's demo live. Numbers printing as they happen close it.</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <div class="honest">
+    <b>Keep it honest (what not to claim):</b> the apps are standalone and connected by API — don't sell “one login for everything”; there is <b>no bundle discount</b>; the trial takes a card at sign-up; nothing on abetworks.in is purchasable until the switch flips; per-seat prices mirror headcount (LeadGenius per user, Connect per agent). Every number above traces to a runnable demo or an acceptance check — if it isn't in one of those, don't say it.
+  </div>
+
+  <footer>
+    <span>Abetworks — five apps, two $0 connectors, 35 free hub tools</span>
+    <span>abetworks.in · sales one-pager · 17 Oct 2026</span>
+  </footer>
+
+</div>
+</body>
+</html>

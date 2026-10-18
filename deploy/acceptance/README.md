@@ -28,6 +28,12 @@ be refused**. Per host type it checks:
   static file it must mention the llms index. Route-based robots (pdf, hub)
   can't carry that comment, so the pointer check is skipped there — the file
   itself still has to serve.
+- **the link card (every app host)** — the front page's `og:image` must
+  resolve to a real image (200 `image/png` or `image/jpeg`), absolute or
+  relative. The paid five and workflow/api hosts generate theirs at build
+  time; hub and pdf ship a static `/og.png`. A tag pointing at nothing (or at
+  a domain that never gets DNS) fails deploy day — the failure mode nobody
+  notices in a browser but every prospect sees when the link is shared.
 - **paid apps** (analytics · abetagent · leadgenius · leadworks · connect) —
   `/pricing` and `/signup` render; the dashboard route (`/dashboard`, connect:
   `/integrations`) gates anonymous visitors; `POST /api/billing/webhook` rejects

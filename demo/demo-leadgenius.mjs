@@ -56,6 +56,15 @@
 // stamps the contact, keeps the sink at one email, and refuses the next
 // enroll with the status the recipient herself caused.
 //
+// Step [15] takes the signal to the other door that shares this route:
+// Twilio's delivery-status callback. It used to be matched AS an incoming
+// reply — From is our own sending number, so the contact lookup missed and
+// every `undelivered` became a silent 200. Now `undelivered` bounces like an
+// email does (enrollment + contact BOUNCED, redelivery absorbed under #60,
+// re-enroll refused by name), while a `failed` whose ErrorCode names the
+// sender rather than the recipient changes nothing at all — the control is
+// posted first, live.
+//
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
@@ -1166,6 +1175,102 @@ async function main() {
     taraReenroll.status === 409 && (taraReenroll.json?.error ?? "").includes("contact is UNSUBSCRIBED")
       ? ok("the unsubscribed address cannot re-enroll — the 409 names what the recipient herself did", taraReenroll.json?.error)
       : bad("re-enroll refusal after unsubscribe", `HTTP ${taraReenroll.status} ${JSON.stringify(taraReenroll.json).slice(0, 160)}`);
+
+    // ------------------------------------------------- whatsapp delivery [15] --
+    // The same lifecycle signal exists on the other channel that posts here:
+    // Twilio's DELIVERY-STATUS callback (MessageSid + MessageStatus, ErrorCode
+    // on failures) shares the replies' route and used to be matched AS a
+    // reply — no Body, From is our own sending number, the contact lookup
+    // misses, silent 200. Twilio credentials cannot run in a sandbox, so the
+    // one accepted-message row is seeded by SQL in exactly the shape queue.ts
+    // stores after sendWhatsApp returns message.sid. Everything from the
+    // callback onward — signature check, dispatch, code table, flips, stamp,
+    // idempotency — is the real app.
+    console.log("\n[15] WhatsApp delivery status: Twilio's undelivered callback used to vanish — now it bounces like an email");
+
+    if (DATABASE_URL) {
+      const waAcct = await api("/api/sending-accounts", {
+        method: "POST",
+        body: {
+          name: "Ridgeview WhatsApp (Twilio, sandbox — no live sends)",
+          channel: "WHATSAPP",
+          provider: "TWILIO",
+          dailyLimit: 100,
+          config: { accountSid: "ACdemo0000000000000000000000000000", authToken: "sandbox-not-a-real-credential", fromNumber: "+14155550100" },
+        },
+      });
+      const waAccountId = pickId(waAcct.json, "sendingAccount");
+      waAccountId ? ok("WhatsApp sending account created — the channel the callback names", waAccountId) : bad("WhatsApp account", JSON.stringify(waAcct.json).slice(0, 200));
+
+      const UMA_PHONE = `+15559${RUN.slice(-5)}`;
+      const umaId = await mkContact({
+        email: `uma.pierce@guard.${RUN.slice(-6)}.dev`,
+        firstName: "Uma", lastName: "Pierce", company: "Kestrel Yard", title: "Site Manager", phone: UMA_PHONE,
+      });
+      const enrollUma = await api("/api/enrollments", { method: "POST", body: { contactId: umaId, sequenceId: sequenceGId, campaignId: campaignGId } });
+      const umaEnrId = enrollUma.json?.enrollment?.id;
+      enrollUma.status === 201 && umaEnrId
+        ? ok("Uma enrolls — the WhatsApp send is the seeded row; the callback matching it is the real route", umaEnrId)
+        : bad("Uma enrolled", `HTTP ${enrollUma.status} ${JSON.stringify(enrollUma.json).slice(0, 200)}`);
+
+      const WA_SID = `SMridgeviewwa${RUN.slice(-8)}`;
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `INSERT INTO "SentMessage" (id, "sendingAccountId", "enrollmentId", "contactId", channel, body, "providerMessageId", status, "sentAt", "createdAt")
+         VALUES ('smwa${RUN}', '${waAccountId}', '${umaEnrId}', '${umaId}', 'WHATSAPP', 'Uma - following up about Kestrel Yard', '${WA_SID}', 'SENT', now(), now());`], { stdio: "pipe" });
+      ok("the Twilio acceptance seeded by SQL — the shape queue.ts writes after sendWhatsApp returns message.sid", WA_SID);
+
+      const postTwilioStatus = async (params) => {
+        const raw = new URLSearchParams({
+          MessageSid: WA_SID, MessageStatus: params.status,
+          From: "whatsapp:+14155550100", To: `whatsapp:${UMA_PHONE}`,
+          ...(params.errorCode ? { ErrorCode: params.errorCode, ErrorMessage: params.errorMessage ?? "demo" } : {}),
+        }).toString();
+        const ts = String(Math.floor(Date.now() / 1000));
+        const sig = crypto.createHmac("sha256", INBOUND_SECRET).update(`${ts}.${raw}`).digest("hex");
+        const res = await fetch(`${BASE}/api/webhooks/whatsapp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", "x-inbound-timestamp": ts, "x-inbound-signature": sig },
+          body: raw,
+        });
+        return { status: res.status, text: await res.text() };
+      };
+
+      const ctl = await postTwilioStatus({ status: "failed", errorCode: "11200" });
+      const ctlEnr = await api(`/api/enrollments/${umaEnrId}`);
+      const ctlContact = await api(`/api/contacts/${umaId}`);
+      ctl.status === 200 && ctlEnr.json?.status === "ACTIVE" && ctlContact.json?.status === "ACTIVE"
+        ? ok("failed + ErrorCode 11200 — a code naming neither the number nor its owner — is acknowledged and changes NO state", `enrollment ${ctlEnr.json?.status}`)
+        : bad("non-recipient failure changes nothing", `HTTP ${ctl.status}, enrollment ${ctlEnr.json?.status}, contact ${ctlContact.json?.status}`);
+
+      const undel = await postTwilioStatus({ status: "undelivered" });
+      undel.status === 200 ? ok("signed undelivered callback accepted — form-encoded, same HMAC as Ravi's reply", "MessageStatus=undelivered") : bad("undelivered callback", `HTTP ${undel.status} ${undel.text.slice(0, 140)}`);
+      const umaStopped = await waitFor(async () => {
+        const r = await api(`/api/enrollments/${umaEnrId}`);
+        return r.json?.status === "BOUNCED" ? r.json : null;
+      }, { timeout: 20000, label: "Uma enrollment BOUNCED from the WhatsApp callback" });
+      umaStopped
+        ? ok("the undelivered callback flipped the enrollment — a shape this route swallowed for its whole life", umaStopped.status)
+        : bad("undelivered flips the enrollment", "enrollment never reached BOUNCED");
+
+      const umaStamped = await api(`/api/contacts/${umaId}`);
+      umaStamped.json?.status === "BOUNCED"
+        ? ok("and stamped the contact from the OTHER channel's provider — one lifecycle vocabulary, every mail door", umaStamped.json?.status)
+        : bad("undelivered stamps the contact", `status ${JSON.stringify(umaStamped.json?.status)}`);
+
+      const again = await postTwilioStatus({ status: "undelivered" });
+      const umaFull = await api(`/api/enrollments/${umaEnrId}`);
+      const bouncedRows = (umaFull.json?.activities ?? []).filter((a) => a.type === "BOUNCED").length;
+      again.status === 200 && bouncedRows === 1 && umaFull.json?.status === "BOUNCED"
+        ? ok("Twilio's redelivery replays nothing — the #60 idempotency gate holds on this channel too", `BOUNCED activities: ${bouncedRows}`)
+        : bad("redelivery idempotent", `HTTP ${again.status}, ${bouncedRows} BOUNCED rows, status ${umaFull.json?.status}`);
+
+      const umaReenroll = await api("/api/enrollments", { method: "POST", body: { contactId: umaId, sequenceId: sequenceGId, campaignId: campaignGId } });
+      umaReenroll.status === 409 && (umaReenroll.json?.error ?? "").includes("contact is BOUNCED")
+        ? ok("the undeliverable number cannot re-enroll — the 409 names what the carrier reported", umaReenroll.json?.error)
+        : bad("re-enroll refusal after undelivered", `HTTP ${umaReenroll.status} ${JSON.stringify(umaReenroll.json).slice(0, 160)}`);
+    } else {
+      console.log("  (DATABASE_URL unset: skipped the WhatsApp delivery-status proof — it needs the seeded SentMessage)");
+    }
 
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);

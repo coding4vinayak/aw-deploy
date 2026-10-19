@@ -48,6 +48,14 @@
 // — the demo rewinds the scheduled wait with SQL so it is the sweep's own
 // guard that halts the send, not a lucky clock.
 //
+// Step [14] closes the loop: the guard reads Contact.status, and now the
+// PROVIDER writes it. Priya's real bounce from step [4] stamps her address
+// BOUNCED and her re-enroll is refused by name; Tara's story is the signal
+// that used to do NOTHING — an `unsubscribe` callback created an Activity row
+// while the flip branch walked past it — and now it flips the enrollment,
+// stamps the contact, keeps the sink at one email, and refuses the next
+// enroll with the status the recipient herself caused.
+//
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
@@ -373,6 +381,20 @@ async function main() {
       return r.json?.status === "BOUNCED" ? r.json : null;
     }, { timeout: 20000, label: "Priya enrollment BOUNCED" });
     ok("Priya enrollment flipped to BOUNCED", `sent message id ${priyaMsgId}`);
+
+    // The same callback that stops the enrollment must stamp the ADDRESS —
+    // Contact.status is the column the enroll guard and the sweep read, and a
+    // webhook bounce used to write the enrollment row and leave the contact
+    // ACTIVE: the identical dead address could then start a brand-new
+    // sequence one POST later. [14] gives the unsubscribe half its own story.
+    const priyaStamped = await api(`/api/contacts/${priyaId}`);
+    priyaStamped.json?.status === "BOUNCED"
+      ? ok("the bounce stamped Priya's contact too — BOUNCED is now provider-written, not only operator-marked", priyaStamped.json?.status)
+      : bad("bounce stamps the contact", `status ${JSON.stringify(priyaStamped.json?.status)}`);
+    const priyaReenroll = await api("/api/enrollments", { method: "POST", body: { contactId: priyaId, sequenceId, campaignId } });
+    priyaReenroll.status === 409 && (priyaReenroll.json?.error ?? "").includes("contact is BOUNCED")
+      ? ok("the bounced address cannot re-enroll — the 409 names what the ESP reported", priyaReenroll.json?.error)
+      : bad("re-enroll refusal after a real bounce", `HTTP ${priyaReenroll.status} ${JSON.stringify(priyaReenroll.json).slice(0, 160)}`);
 
     // ------------------------------------------- Daniel (reply) ----------
     console.log("\n[5] Daniel (reply): LinkedIn-style reply callback; sequence must stop");
@@ -1086,6 +1108,64 @@ async function main() {
     } else {
       console.log("  (DATABASE_URL unset: skipped the sweep-rewind proof of the engine guard)");
     }
+
+    // ------------------------------------------------ provider lifecycle [14] --
+    // [13] proved the guard READS Contact.status; Priya's half above proved a
+    // real bounce now WRITES it. Tara's is the signal that used to do nothing
+    // at all: mapEmailEvent had `unsubscribe`, the Activity row got created —
+    // and the flip branch, keyed on BOUNCED/COMPLAINED only, walked past it.
+    // The sequence kept emailing an address the ESP said had opted out. The
+    // day-gated sequence from [13] keeps the timing honest: the nudge waits a
+    // full day behind the intro, so what stops it can only be the callback.
+    console.log("\n[14] The unsubscribe callback itself: enrollment flipped, address stamped, re-enroll refused");
+
+    const taraId = await mkContact({
+      email: `tara.whitfield@guard.${RUN.slice(-6)}.dev`,
+      firstName: "Tara", lastName: "Whitfield", company: "Hallmeet", title: "VP Customer Ops",
+    });
+    const enrollTara = await api("/api/enrollments", { method: "POST", body: { contactId: taraId, sequenceId: sequenceGId, campaignId: campaignGId } });
+    const taraEnrId = enrollTara.json?.enrollment?.id;
+    enrollTara.status === 201 && taraEnrId
+      ? ok("Tara enrolls into the day-gated sequence — the unsubscribe will arrive mid-flight", taraEnrId)
+      : bad("Tara enrolled", `HTTP ${enrollTara.status} ${JSON.stringify(enrollTara.json).slice(0, 200)}`);
+
+    const taraIntro = await waitFor(() => {
+      const m = msgsTo("tara.whitfield@guard");
+      return m.length >= 1 ? m : null;
+    }, { label: "Tara's intro in the sink" });
+    taraIntro ? ok("Tara's intro delivered over real SMTP", `subject "${taraIntro[0].subject}"`) : bad("Tara intro delivered");
+
+    const unsub = await inbound(
+      "/api/webhooks/email",
+      { "message-id": taraIntro[0].messageId, event: "unsubscribe", timestamp: Math.floor(Date.now() / 1000) },
+      { extra: { "x-provider": "mailgun" } }
+    );
+    unsub.status === 200 && unsub.text.includes("ok")
+      ? ok("signed unsubscribe callback accepted", "event=unsubscribe provider=mailgun")
+      : bad("signed unsubscribe callback", `HTTP ${unsub.status} ${unsub.text.slice(0, 140)}`);
+
+    const taraStopped = await waitFor(async () => {
+      const r = await api(`/api/enrollments/${taraEnrId}`);
+      return r.json?.status === "UNSUBSCRIBED" ? r.json : null;
+    }, { timeout: 20000, label: "Tara enrollment UNSUBSCRIBED" });
+    taraStopped
+      ? ok("the unsubscribe flipped the enrollment — this callback used to flip nothing at all", taraStopped.status)
+      : bad("unsubscribe flips the enrollment", "enrollment never reached UNSUBSCRIBED");
+
+    const taraStamped = await api(`/api/contacts/${taraId}`);
+    taraStamped.json?.status === "UNSUBSCRIBED"
+      ? ok("and stamped the contact — the provider signal and the operator's mark are now the same column", taraStamped.json?.status)
+      : bad("unsubscribe stamps the contact", `status ${JSON.stringify(taraStamped.json?.status)}`);
+
+    const taraMails = msgsTo("tara.whitfield@guard");
+    taraMails.length === 1
+      ? ok("one email to an unsubscribed address, ever", `subject "${taraMails[0].subject}"`)
+      : bad("no second email after unsubscribe", `${taraMails.length} messages in the sink`);
+
+    const taraReenroll = await api("/api/enrollments", { method: "POST", body: { contactId: taraId, sequenceId: sequenceGId, campaignId: campaignGId } });
+    taraReenroll.status === 409 && (taraReenroll.json?.error ?? "").includes("contact is UNSUBSCRIBED")
+      ? ok("the unsubscribed address cannot re-enroll — the 409 names what the recipient herself did", taraReenroll.json?.error)
+      : bad("re-enroll refusal after unsubscribe", `HTTP ${taraReenroll.status} ${JSON.stringify(taraReenroll.json).slice(0, 160)}`);
 
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);

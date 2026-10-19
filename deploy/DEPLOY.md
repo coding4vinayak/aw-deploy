@@ -58,7 +58,13 @@ lead lands (`DATA_DIR=/data`). On free, leads die on every deploy.
 Full, ready-to-paste CLI in **`deploy/STRIPE.md`** (≈20 minutes, test mode
 first): products + two prices per app, five webhook endpoints, the customer
 portal, then the restricted live key. The blueprint import prompts for exactly
-those vars — paste them there, or add them in each service's Environment tab.
+those vars — paste them there, or add them in each service's Environment tab. (Importing a single app from its own repo
+instead? Its `render.yaml` now declares that app's whole config — Stripe, the
+mail provider or webhook, the LLM key — so the import prompts for exactly what
+the code reads. Every prompt is skippable: without Stripe the billing routes
+answer 500, without a mail provider mail is logged instead of sent, without an
+LLM key the AI paths are omitted. Each repo's test suite fails if the manifest
+ever falls behind the code.)
 
 ## 4. DNS (Cloudflare)
 
@@ -94,7 +100,10 @@ bash deploy/acceptance/acceptance.sh # does it behave? — gates, 4xx on junk, h
 
 **Grade:** every app's `/api/health` returns `{"ok":true,"db":"up"}`.
 A **503** means DB/migrations are wrong — and because the blueprint makes
-`/api/health` the health check, traffic never switched to that deploy.
+`/api/health` the health check, traffic never switched to that deploy. These exact commands were
+rehearsed on 19 Oct on clean clones against virgin databases — the build meets
+an empty schema and works, and every app's declared `/api/health` answered
+`{"ok":true,"db":"up"}` on the first boot (five apps, 5/5 steps · 8/8 checks).
 `acceptance.sh` then grades *behavior* from the outside: dashboard routes gate
 anonymous visitors, billing webhooks reject unsigned and forged payloads (4xx,
 never 2xx/5xx), abetapi refuses anonymous callers and publishes its contract,

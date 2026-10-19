@@ -107,6 +107,21 @@
 // rejection as the channel's only voice: the recipient-named 400 and the
 // no-URL contact write the email webhook's bounce lifecycle, the 429 that
 // accuses only the hour moves nothing.
+// And step [20] makes the **reputation floor** a number the ledger writes:
+// `reputationScore` used to have no writer at all — every account frozen at
+// the default 100 while the gate's `> 50` and the README's "reputation
+// floors" pretended otherwise. One sender gets a seeded bad 14 days (20
+// bounces + 5 complaints + 25 sends). Its first real send flips and the
+// worker's recompute reads the window it just joined: 51 deliverable, 35
+// weighted hurts → **31**. A signed bounce on that same row tips it to 20+1
+// bounces → **29**, and every later enroll rides the identical healthy
+// sender while the gated account's ledger grows by nothing. Age the hurts
+// off the window and the score sits stale until someone re-reads it — then
+// the webhook door recomputes on a provider receipt and the empty window
+// reads as a perfect 100: the next mail goes out THROUGH the recovered
+// account. The throttled calendar pass is the same arithmetic on a timer
+// (unit-tested; in a two-minute demo its 15-minute throttle makes the event
+// doors the ones that answer).
 //
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
@@ -1962,6 +1977,163 @@ async function main() {
       liLedger === "4|1|3"
         ? ok("the day's LinkedIn ledger: one SENT, three FAILED — and only two of those failures accused a person", `rows|sent|failed = ${liLedger}`)
         : bad("linkedin ledger shape", liLedger);
+    }
+
+    // ------------------------------------------------- [20] reputation --
+    console.log("\n[20] The reputation floor is a derived number: a bad window takes an account out of rotation, an event gives it back");
+
+    if (!DATABASE_URL) {
+      console.log("  (DATABASE_URL unset: skipped the floor proof — it seeds ledgers and moves clocks through psql)");
+    } else {
+      const acctList20 = await api("/api/sending-accounts");
+      const parked20 = (acctList20.json?.accounts ?? []).filter((a) => a.channel === "EMAIL" && a.isActive).map((a) => a.id);
+      for (const id of parked20) await api(`/api/sending-accounts/${id}`, { method: "PATCH", body: { isActive: false } });
+      parked20.length >= 1
+        ? ok("every established EMAIL sender steps aside — two fresh accounts are the whole rotation", parked20.join(", "))
+        : bad("EMAIL senders parked for the floor", "the list held no active EMAIL account");
+
+      const mkEmailAcct = async (fromEmail) => {
+        const r = await api("/api/sending-accounts", {
+          method: "POST",
+          body: {
+            name: `Floor sender ${fromEmail}`,
+            channel: "EMAIL",
+            provider: "SMTP",
+            dailyLimit: 200,
+            config: { host: "127.0.0.1", port: SINK_PORT, secure: false, user: "demo", pass: "demo", fromName: "Floor", fromEmail },
+          },
+        });
+        return pickId(r.json, "sendingAccount");
+      };
+      const healthyId = await mkEmailAcct("healthy@floor-gate.dev");
+      const badId = await mkEmailAcct("stained@floor-gate.dev");
+      healthyId && badId ? ok("two identical senders — same cap, same sink, same 200/day; only their ledgers will differ", `healthy ${healthyId}, stained ${badId}`) : bad("floor accounts", "an account was not created");
+      // POST has no isActive field (the create table doesn't carry it), so the
+      // healthy twin is stepped down the moment it exists: until the stained
+      // account's score is BORN of an event, it must be the only sender.
+      await api(`/api/sending-accounts/${healthyId}`, { method: "PATCH", body: { isActive: false } });
+
+      const accRep = (id) => Number(execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c",
+        `SELECT "reputationScore" FROM "SendingAccount" WHERE id = '${id}';`], { stdio: "pipe" }).toString().trim());
+      const WINDOW = `"createdAt" >= now() - interval '14 days'`;
+      const repuRows = (id, extraWhere) => execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-F", "|", "-c",
+        `SELECT count(*), count(*) FILTER (WHERE status = 'SENT') FROM "SentMessage" WHERE "sendingAccountId" = '${id}'${extraWhere ? ` AND ${extraWhere}` : ""};`], { stdio: "pipe" }).toString().trim();
+
+      const campM = await api("/api/campaigns", { method: "POST", body: { name: "Floor roster", goal: "Prove the gate reads a score the ledger writes" } });
+      const campaignMId = pickId(campM.json, "campaign");
+      await api(`/api/campaigns/${campaignMId}`, { method: "PATCH", body: { status: "ACTIVE" } });
+      const seqM = await api("/api/sequences", {
+        method: "POST",
+        body: {
+          name: "Floor: one step, due at once",
+          channel: "EMAIL",
+          campaignId: campaignMId,
+          stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: t1Id, delayDays: 0, delayHours: 0 }],
+        },
+      });
+      const sequenceMId = pickId(seqM.json, "sequence");
+      campaignMId && sequenceMId ? ok("one due-at-once sequence drives both senders", sequenceMId) : bad("floor sequence", JSON.stringify(seqM.json).slice(0, 160));
+
+      // Exactly 50 rows, driven by generate_series alone. An earlier draft
+      // cross-joined the 8 'Nine-day Gate' contacts with the 50 ticks: 400
+      // rows, every ratio in the block silently wrong. Contact picks rotate
+      // through the roster with OFFSET so no single row's contact owns the
+      // whole ledger.
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `INSERT INTO "SentMessage" (id, "sendingAccountId", "contactId", channel, body, status, "createdAt")
+         SELECT gen_random_uuid()::text, '${badId}',
+                (SELECT id FROM "Contact" WHERE "company" = 'Nine-day Gate' ORDER BY id OFFSET (g % (SELECT count(*) FROM "Contact" WHERE "company" = 'Nine-day Gate')) LIMIT 1),
+                'EMAIL', 'floor seed ' || g,
+                CASE WHEN g <= 20 THEN 'BOUNCED' WHEN g <= 25 THEN 'COMPLAINED' ELSE 'SENT' END,
+                now() - ((g % 13) || ' days')::interval
+         FROM generate_series(1, 50) g;`], { stdio: "pipe" });
+      const seeded = repuRows(badId, WINDOW);
+      seeded === "50|25"
+        ? ok("the stained account's 14 days, seeded straight into the ledger: 20 bounces + 5 complaints + 25 sends — 35 weighted hurts over 50 deliverable rows", `recent rows|sent = ${seeded}`)
+        : bad("seeded bad ledger", seeded);
+
+      const mMail = (n) => msgsTo(`repu.m${n}@${RUN.slice(-6)}.dev`).length;
+      const xMail = () => msgsTo(`repu.x@${RUN.slice(-6)}.dev`);
+      const xId = await mkContact({ email: `repu.x@${RUN.slice(-6)}.dev`, firstName: "Xenia", lastName: "Floor Row", company: "Floor Gate", title: "Operations Lead" });
+      const mIds = [];
+      for (let i = 0; i < 5; i++) {
+        mIds.push(await mkContact({ email: `repu.m${i}@${RUN.slice(-6)}.dev`, firstName: `Remi${i}`, lastName: "Floor Row", company: "Floor Gate", title: "Operations Lead" }));
+      }
+
+      // Door 1 — the worker's own flip. x rides the stained account (the
+      // only active sender), and when its row flips to SENT the recompute
+      // reads the window that row just joined.
+      await api("/api/enrollments", { method: "POST", body: { contactId: xId, sequenceId: sequenceMId, campaignId: campaignMId } });
+      await waitFor(() => (xMail().length >= 1 ? true : null), { timeout: 120000, label: "x's mail (the minute sweep spends the due step through the only active sender)" });
+      const xMsgId = xMail()[0].messageId;
+      const xOnBad = execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c",
+        `SELECT count(*) FROM "SentMessage" WHERE "sendingAccountId" = '${badId}' AND "providerMessageId" = '${xMsgId}';`], { stdio: "pipe" }).toString().trim();
+      xOnBad === "1"
+        ? ok("x went out THROUGH the stained sender and the sink's provider id landed on the row — the row a provider can still answer for", `providerMessageId ${xMsgId}`)
+        : bad("x's send on the stained account", `rows with that provider id = ${xOnBad}`);
+
+      let flipRep = -1;
+      for (let i = 0; i < 20 && flipRep !== 31; i++) { flipRep = accRep(badId); if (flipRep !== 31) await sleep(500); }
+      flipRep === 31
+        ? ok("event-driven, no waiting: the flip's recompute read 51 deliverable rows, 35 weighted hurts — 100 x (1 - 35/51) = 31, written by the send itself", `score ${flipRep}`)
+        : bad("worker-flip recompute", `score ${flipRep}`);
+
+      // Door 2 — the provider's receipt. A signed bounce on x's own row tips
+      // the window's bookkeeping: the send becomes a bounce.
+      await inbound("/api/webhooks/email", { "message-id": xMsgId, event: "bounce", timestamp: Math.floor(Date.now() / 1000) }, { extra: { "x-provider": "mailgun" } });
+      let badRep = -1;
+      for (let i = 0; i < 20 && badRep !== 29; i++) { badRep = accRep(badId); if (badRep !== 29) await sleep(500); }
+      badRep === 29
+        ? ok("the webhook door: the receipt relabels the row and the same row's account recomputes — 21 bounces + 5 complaints = 36 weighted over 51, 29 points, 21 under the floor", `score ${badRep}`)
+        : bad("webhook recompute", `score ${badRep}`);
+
+      await api(`/api/sending-accounts/${healthyId}`, { method: "PATCH", body: { isActive: true } });
+      for (let i = 0; i <= 3; i++) await api("/api/enrollments", { method: "POST", body: { contactId: mIds[i], sequenceId: sequenceMId, campaignId: campaignMId } });
+      await waitFor(() => (mMail(0) + mMail(1) + mMail(2) + mMail(3) >= 4 ? true : null), { timeout: 120000, label: "all four due enrolls delivered" });
+      let refuse = "";
+      for (let i = 0; i < 20 && refuse !== `4|4|51|25`; i++) { refuse = `${repuRows(healthyId, "")}|${repuRows(badId, WINDOW)}`; if (refuse !== "4|4|51|25") await sleep(500); }
+      const healthyRepAfter = accRep(healthyId);
+      refuse === "4|4|51|25" && healthyRepAfter === 100
+        ? ok("the floor refused traffic: all four sends rode the healthy sender (its own recomputed score reads a spotless 100) while the stained window grew by NOTHING", `healthy rows|sent = 4|4, stained recent = 51|25 — unchanged from the bounce`)
+        : bad("gated sender took traffic", `${refuse}, healthy score ${healthyRepAfter}`);
+
+      // The window is what times the punishment; move the hurts off its end.
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "SentMessage" SET "createdAt" = now() - interval '20 days' WHERE "sendingAccountId" = '${badId}';`], { stdio: "pipe" });
+      const agedOut = repuRows(badId, WINDOW);
+      agedOut === "0|0"
+        ? ok("the 51 hurts moved off the end of the window — the calendar, not a cleanup job, emptied the account's bad 14 days", `recent rows = ${agedOut}`)
+        : bad("aging the window", agedOut);
+      const staleRep = accRep(badId);
+      staleRep === 29
+        ? ok("the gate reads the column, not the ledger: with an empty window the stored score is STILL 29 until some event recomputes it", `score ${staleRep}`)
+        : bad("score stale between events", `score ${staleRep} — expected 29 until an event re-reads`);
+
+      // The release is the same door as the punishment, reading the other way:
+      // a second signed receipt on x's row (spamreport — a NEW event type is a
+      // new idempotency key; a replayed bounce would be a no-op) recomputes
+      // against the aged-out window.
+      await inbound("/api/webhooks/email", { "message-id": xMsgId, event: "spamreport", timestamp: Math.floor(Date.now() / 1000) }, { extra: { "x-provider": "mailgun" } });
+      let releasedRep = -1;
+      for (let i = 0; i < 20 && releasedRep !== 100; i++) { releasedRep = accRep(badId); if (releasedRep !== 100) await sleep(500); }
+      releasedRep === 100
+        ? ok("released by the window: the receipt's recompute found zero rows in the 14 days — nothing to weigh — and wrote the perfect 100 the schema default used to only pretend", `score ${releasedRep}`)
+        : bad("webhook door releases the account", `score ${releasedRep}`);
+
+      await api(`/api/sending-accounts/${healthyId}`, { method: "PATCH", body: { isActive: false } });
+      await api("/api/enrollments", { method: "POST", body: { contactId: mIds[4], sequenceId: sequenceMId, campaignId: campaignMId } });
+      await waitFor(() => (mMail(4) >= 1 ? true : null), { timeout: 150000, label: "m4 delivered through the recovered account" });
+      const recoveredRep = accRep(badId);
+      recoveredRep === 100 && repuRows(badId, "") === "52|26"
+        ? ok("and TAKING live traffic again: m4 went out through the once-stained sender — its flip keeps the empty window at 100, and the lifetime ledger still tells the whole story", `score ${recoveredRep}, lifetime rows|sent = 52|26`)
+        : bad("recovered account took traffic", `score ${recoveredRep}, lifetime ledger ${repuRows(badId, "")}`);
+
+      for (const id of parked20) await api(`/api/sending-accounts/${id}`, { method: "PATCH", body: { isActive: true } });
+      const reList20 = await api("/api/sending-accounts");
+      const backUp20 = (reList20.json?.accounts ?? []).filter((a) => a.channel === "EMAIL" && a.isActive).map((a) => a.id);
+      parked20.every((id) => backUp20.includes(id))
+        ? ok("the established senders are back in play — the floor proved, and the next run's sweep will simply re-derive every score it sees", `${backUp20.length} active EMAIL accounts`)
+        : bad("senders restored after the floor", backUp20.join(","));
     }
 
     // ------------------------------------------------------------ summary --

@@ -89,6 +89,19 @@
 // elseThen: ...}` sequence is **400ed by name** — the else of an event
 // condition would fire on every other trigger.
 //
+// Step [18] holds the cap to its own number. #27 made warmup a real send
+// limit (stage 0 → 5/day, +5 per nightly pass) but compared it against rows
+// the send worker had already flipped to `SENT` — so a `QUEUED` row was
+// invisible until its worker ran, one due-sweep tick could mint a sixth
+// "5/day" email while five sat in flight, and every bounce receipt that
+// relabeled a row took it out of the count again, freeing capacity for the
+// next email — rewarding exactly the traffic the ramp exists to throttle.
+// The ledger now counts every row the day committed except a dispatch
+// `FAILED`: seven due enrolls through one stage-0 sender send **exactly
+// five** and park two ACTIVE with the reason in the response; one live
+// bounce relabel keeps the eighth refused; one nightly pass raises the cap
+// and the next sweep tick delivers all eight, the bounced row still spent.
+//
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
@@ -1632,6 +1645,134 @@ async function main() {
         : bad("else-branch trails", `quinn=${quinnTrail} rachel=${rachelTrail}`);
     } else {
       console.log("  (DATABASE_URL unset: skipped the elseThen proof — it needs the seeded receipts and the rewound clocks)");
+    }
+
+    // ------------------------------------------------------------------ warmup cap [18] --
+    // #27 made the ramp a real cap (stage 0 -> 5/day, +5 per nightly pass) but
+    // compared it against rows the worker had already flipped to SENT: rows
+    // still QUEUED were invisible, so one sweep tick could mint a sixth "5/day"
+    // email while five sat in flight, and every bounce receipt that relabeled a
+    // row BOUNCED retroactively freed room for another — rewarding exactly the
+    // traffic the ramp exists to throttle. The ledger now counts every row the
+    // day committed except a dispatch FAILED. This step enrolls seven due
+    // contacts against a lone stage-0 sender (exactly five go out), bounces one
+    // live row and asks for an eighth (refused), then takes one nightly pass —
+    // cap 5 -> 10 — and the parked three arrive on the next sweep tick.
+    console.log("\n[18] The ramp is a cap: 5 means five, in-flight rows count, and a bounce frees nothing");
+
+    if (DATABASE_URL) {
+      const acctList = await api("/api/sending-accounts");
+      const parkedIds = (acctList.json?.accounts ?? []).filter((a) => a.channel === "EMAIL" && a.isActive).map((a) => a.id);
+      for (const id of parkedIds) await api(`/api/sending-accounts/${id}`, { method: "PATCH", body: { isActive: false } });
+      parkedIds.length >= 1
+        ? ok("every established EMAIL sender steps aside — the day's traffic now answers to one warming account", parkedIds.join(", "))
+        : bad("EMAIL senders parked", "the list held no active EMAIL account to disable");
+
+      const rampAcct = await api("/api/sending-accounts", {
+        method: "POST",
+        body: {
+          name: "Ramp gate SMTP (sink)",
+          channel: "EMAIL",
+          provider: "SMTP",
+          dailyLimit: 200,
+          warmupEnabled: true,
+          config: { host: "127.0.0.1", port: SINK_PORT, secure: false, user: "demo", pass: "demo", fromName: "Ramp", fromEmail: "ramp@ramp-gate.dev" },
+        },
+      });
+      const rampId = pickId(rampAcct.json, "sendingAccount");
+      const rampGet = await api(`/api/sending-accounts/${rampId}`);
+      rampId && rampGet.json?.warmupStage === 0 && rampGet.json?.warmupEnabled === true
+        ? ok("a fresh warming account: its own budget 200/day, the cap it actually lives under 5/day", rampId)
+        : bad("warming account", JSON.stringify(rampGet.json).slice(0, 200));
+
+      const campK = await api("/api/campaigns", { method: "POST", body: { name: "Nine-day gate roster", goal: "Prove the cap counts committed sends" } });
+      const campaignKId = pickId(campK.json, "campaign");
+      await api(`/api/campaigns/${campaignKId}`, { method: "PATCH", body: { status: "ACTIVE" } });
+      campaignKId ? ok("gate campaign ACTIVE", campaignKId) : bad("gate campaign", JSON.stringify(campK.json).slice(0, 160));
+
+      const seqK = await api("/api/sequences", {
+        method: "POST",
+        body: {
+          name: "Gate: one step, due at once",
+          channel: "EMAIL",
+          campaignId: campaignKId,
+          stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: t1Id, delayDays: 0, delayHours: 0 }],
+        },
+      });
+      const sequenceKId = pickId(seqK.json, "sequence");
+      sequenceKId ? ok("one-step sequence whose first email is due the moment it is enrolled", sequenceKId) : bad("gate sequence", JSON.stringify(seqK.json).slice(0, 160));
+
+      const kIds = [];
+      const kEmails = [];
+      for (const first of ["kai", "femi", "ines", "omar", "pia", "rune", "tosa", "vera"]) {
+        const email = `${first}.gate@${RUN.slice(-6)}.dev`;
+        const id = await mkContact({ email, firstName: first[0].toUpperCase() + first.slice(1), lastName: "Gate Row", company: "Nine-day Gate", title: "Operations Lead" });
+        kIds.push(id);
+        kEmails.push(email);
+      }
+      const gateMail = () => kEmails.reduce((n, e) => n + msgsTo(e).length, 0);
+      const rampRows = (select) => execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-F", "|", "-c",
+        `SELECT ${select} FROM "SentMessage" WHERE "sendingAccountId" = '${rampId}';`], { stdio: "pipe" }).toString().trim();
+
+      for (let i = 0; i < 5; i++) await api("/api/enrollments", { method: "POST", body: { contactId: kIds[i], sequenceId: sequenceKId, campaignId: campaignKId } });
+      await waitFor(() => (gateMail() >= 5 ? true : null), { timeout: 30000, label: "five gate emails in the sink" });
+      const fiveMail = gateMail();
+      const fiveRows = rampRows("count(*)");
+      fiveMail === 5 && fiveRows === "5"
+        ? ok("five due enrolls filled exactly the day — no sixth slipped past while rows still sat QUEUED", `mail ${fiveMail}, rows ${fiveRows}`)
+        : bad("stage-0 cap holds", `mail ${fiveMail}, rows ${fiveRows}`);
+
+      const enr6 = await api("/api/enrollments", { method: "POST", body: { contactId: kIds[5], sequenceId: sequenceKId, campaignId: campaignKId } });
+      const enr6Id = enr6.json?.enrollment?.id;
+      enr6.status === 201 && (enr6.json?.warning ?? "").includes("No active sending account") && enr6.json?.enrollment?.status === "ACTIVE" && enr6.json?.enrollment?.nextActionAt
+        ? ok("the sixth is refused its sender: 201 with the reason named, ACTIVE with a recorded wait — a cap is a wait, not a failure", String(enr6.json.warning))
+        : bad("sixth enroll refused", `HTTP ${enr6.status}, warning ${JSON.stringify(enr6.json?.warning)}, status ${enr6.json?.enrollment?.status}`);
+      const enr7 = await api("/api/enrollments", { method: "POST", body: { contactId: kIds[6], sequenceId: sequenceKId, campaignId: campaignKId } });
+      const enr7Id = enr7.json?.enrollment?.id;
+
+      let sentFive = "";
+      for (let i = 0; i < 30 && sentFive !== "5"; i++) { sentFive = rampRows("count(*) FILTER (WHERE status = 'SENT')"); if (sentFive !== "5") await sleep(500); }
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "SentMessage" SET status = 'BOUNCED' WHERE id = (SELECT id FROM "SentMessage" WHERE "sendingAccountId" = '${rampId}' AND status = 'SENT' LIMIT 1);`], { stdio: "pipe" });
+      const enr8 = await api("/api/enrollments", { method: "POST", body: { contactId: kIds[7], sequenceId: sequenceKId, campaignId: campaignKId } });
+      const enr8Id = enr8.json?.enrollment?.id;
+      gateMail() === 5 && (enr8.json?.warning ?? "").includes("No active sending account")
+        ? ok("a live bounce relabeled the row and freed NOTHING: the eighth asks at a spent five and is refused the same way", `mail stays ${gateMail()}, SENT before flip ${sentFive}`)
+        : bad("bounce freed capacity", `mail ${gateMail()}, HTTP ${enr8.status}, warning ${JSON.stringify(enr8.json?.warning)}`);
+
+      const passK = await api(`/api/sending-accounts/${rampId}?action=warmup`, { method: "POST" });
+      const rampAfter = await api(`/api/sending-accounts/${rampId}`);
+      passK.status === 200 && rampAfter.json?.warmupStage === 1
+        ? ok("one nightly pass: stage 0 -> 1 — under #27's arithmetic the cap just became 10/day, and the pass wrote no message", `stage ${rampAfter.json?.warmupStage}`)
+        : bad("pass raised the stage", `HTTP ${passK.status}, stage ${rampAfter.json?.warmupStage}`);
+
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "Enrollment" SET "nextActionAt" = now() - interval '60 seconds' WHERE id IN ('${enr6Id}','${enr7Id}','${enr8Id}');`], { stdio: "pipe" });
+      await waitFor(() => (gateMail() >= 8 ? true : null), { timeout: 150000, label: "the parked three go out under the raised cap" });
+      gateMail() === 8
+        ? ok("the raised cap held room for exactly the overdue three: eight gate emails, and no ninth the budget did not pay for", `gate mail ${gateMail()}`)
+        : bad("parked three released", `mail ${gateMail()} after the pass`);
+
+      let ledger = "";
+      for (let i = 0; i < 30 && ledger !== "8|7|1"; i++) { ledger = rampRows("count(*), count(*) FILTER (WHERE status = 'SENT'), count(*) FILTER (WHERE status = 'BOUNCED')"); if (ledger !== "8|7|1") await sleep(500); }
+      ledger === "8|7|1"
+        ? ok("the day's ledger: eight rows, seven SENT, the one BOUNCED still spent — nothing QUEUED left, no FAILED given back", `rows|sent|bounced = ${ledger}`)
+        : bad("cap ledger shape", ledger);
+
+      const doneK = await waitFor(async () => {
+        const g = await Promise.all([enr6Id, enr7Id, enr8Id].map((id) => api(`/api/enrollments/${id}`)));
+        return g.every((r) => r.json?.enrollment?.status === "COMPLETED" || r.json?.status === "COMPLETED") ? true : null;
+      }, { timeout: 30000, label: "the three parked enrollments completing" });
+      doneK ? ok("the parked enrollments ran to COMPLETED — held back, not harmed", `enr ${[enr6Id, enr7Id, enr8Id].join(", ")}`) : bad("parked enrollments completed", "timeout");
+
+      for (const id of parkedIds) await api(`/api/sending-accounts/${id}`, { method: "PATCH", body: { isActive: true } });
+      const reList = await api("/api/sending-accounts");
+      const backUp = (reList.json?.accounts ?? []).filter((a) => a.channel === "EMAIL" && a.isActive).length;
+      backUp === parkedIds.length + 1
+        ? ok("the established senders are back in play — the gate proved and closed", `${backUp - 1} restored, plus the warming account`)
+        : bad("senders restored", `${backUp} active EMAIL accounts, expected ${parkedIds.length + 1}`);
+    } else {
+      console.log("  (DATABASE_URL unset: skipped the cap proof — it flips row statuses and rewinds clocks through psql)");
     }
 
     // ------------------------------------------------------------ summary --

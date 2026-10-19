@@ -65,6 +65,19 @@
 // sender rather than the recipient changes nothing at all — the control is
 // posted first, live.
 //
+// Step [16] is the other half of the same callback: `delivered` and `read` —
+// the provider saying the person got the message and looked at it. They used
+// to be acknowledged with a 200 that wrote nothing, so a WhatsApp step could
+// only ever be *sent*: hasOpen and the attribution fold key on the Activity
+// row, not the channel. Two contacts share one `{if: "no_open", then: "end"}`
+// step and one rewound clock; only Cole's receipts stop at `delivered`, and
+// the sweep ENDS his run — while Victor, whose `read` became a cross-channel
+// OPENED row, is still ACTIVE an entire sweep window later with one email in
+// the sink. Same condition, same clock, opposite decisions: the deciding fact
+// arrived on the other channel. Redelivered receipts replay through the same
+// #60 gate (one OPENED row), corroborating `sent` writes nothing, and the
+// attribution table shows WHATSAPP opens for the first time.
+//
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
@@ -1270,6 +1283,188 @@ async function main() {
         : bad("re-enroll refusal after undelivered", `HTTP ${umaReenroll.status} ${JSON.stringify(umaReenroll.json).slice(0, 160)}`);
     } else {
       console.log("  (DATABASE_URL unset: skipped the WhatsApp delivery-status proof — it needs the seeded SentMessage)");
+    }
+
+    // ------------------------------------------------ whatsapp engagement [16] --
+    // The funnel half of the same callback. `delivered` and `read` are the
+    // provider saying the person got the message and looked at it, and until
+    // this round they were acknowledged with a 200 that wrote nothing — so a
+    // WhatsApp step could only ever be SENT. hasOpen keys on the Activity row,
+    // not the channel, which is what makes the proof cross-channel: two
+    // contacts share one `{if: "no_open", then: "end"}` step (at the sweep:
+    // nobody opened → end the run; someone did → the step waits) and one
+    // rewound clock. Only Cole's receipts stop at `delivered`; Victor gets a
+    // signed `read`. The sink is identical for both — one intro — but the
+    // sweep ENDS Cole and leaves Victor ACTIVE: the deciding fact arrived on
+    // the other channel.
+    console.log("\n[16] WhatsApp delivered/read receipts: the funnel half, deciding an email engine's branch");
+
+    if (DATABASE_URL) {
+      const campH = await api("/api/campaigns", { method: "POST", body: { name: "Sable Ridge field list", goal: "Prove WhatsApp receipts feed the email engine" } });
+      const campaignHId = pickId(campH.json, "campaign");
+      campaignHId ? ok("engagement campaign created", campaignHId) : bad("engagement campaign", JSON.stringify(campH.json).slice(0, 200));
+      await api(`/api/campaigns/${campaignHId}`, { method: "PATCH", body: { status: "ACTIVE" } });
+
+      const seqH = await api("/api/sequences", {
+        method: "POST",
+        body: {
+          name: "Sable Ridge intro -> end the run if nobody opened",
+          channel: "EMAIL",
+          campaignId: campaignHId,
+          stepsConfig: [
+            { stepNumber: 1, channel: "EMAIL", templateId: t1Id, delayDays: 1, delayHours: 0 },
+            { stepNumber: 2, channel: "EMAIL", templateId: t2Id, delayDays: 0, delayHours: 0, conditions: { if: "no_open", then: "end" } },
+          ],
+        },
+      });
+      const sequenceHId = pickId(seqH.json, "sequence");
+      sequenceHId ? ok("sequence created — step 2 asks the engine: did anyone open? (channel not part of the question)", sequenceHId) : bad("engagement sequence", JSON.stringify(seqH.json).slice(0, 200));
+
+      const wa2Acct = await api("/api/sending-accounts", {
+        method: "POST",
+        body: {
+          name: "Sable Ridge WhatsApp (Twilio, sandbox — no live sends)",
+          channel: "WHATSAPP",
+          provider: "TWILIO",
+          dailyLimit: 100,
+          config: { accountSid: "ACsable000000000000000000000000000", authToken: "sandbox-not-a-real-credential", fromNumber: "+14155550111" },
+        },
+      });
+      const wa2AccountId = pickId(wa2Acct.json, "sendingAccount");
+      wa2AccountId ? ok("second WhatsApp account — its own sending number, its own seeded messages", wa2AccountId) : bad("second WhatsApp account", JSON.stringify(wa2Acct.json).slice(0, 200));
+
+      const COLE_PHONE = `+15558${RUN.slice(-5)}`;
+      const VICTOR_PHONE = `+15557${RUN.slice(-5)}`;
+      const coleId = await mkContact({
+        email: `cole.dewitt@guard.${RUN.slice(-6)}.dev`,
+        firstName: "Cole", lastName: "DeWitt", company: "Sable Ridge", title: "Logistics Lead", phone: COLE_PHONE,
+      });
+      const victorId = await mkContact({
+        email: `victor.abara@guard.${RUN.slice(-6)}.dev`,
+        firstName: "Victor", lastName: "Abara", company: "Sable Ridge", title: "Yard Supervisor", phone: VICTOR_PHONE,
+      });
+      const enrollCole = await api("/api/enrollments", { method: "POST", body: { contactId: coleId, sequenceId: sequenceHId, campaignId: campaignHId } });
+      const coleEnrId = enrollCole.json?.enrollment?.id;
+      enrollCole.status === 201 && coleEnrId ? ok("Cole enrolls — his receipts will stop at delivered", coleEnrId) : bad("Cole enrolled", `HTTP ${enrollCole.status} ${JSON.stringify(enrollCole.json).slice(0, 200)}`);
+      const enrollVictor = await api("/api/enrollments", { method: "POST", body: { contactId: victorId, sequenceId: sequenceHId, campaignId: campaignHId } });
+      const victorEnrId = enrollVictor.json?.enrollment?.id;
+      enrollVictor.status === 201 && victorEnrId ? ok("Victor enrolls — his will include a signed read", victorEnrId) : bad("Victor enrolled", `HTTP ${enrollVictor.status} ${JSON.stringify(enrollVictor.json).slice(0, 200)}`);
+
+      const coleIntro = await waitFor(() => {
+        const m = msgsTo("cole.dewitt@guard");
+        return m.length >= 1 ? m : null;
+      }, { label: "Cole's intro in the sink" });
+      coleIntro ? ok("Cole's intro delivered over real SMTP", `subject "${coleIntro[0].subject}"`) : bad("Cole intro delivered");
+      const victorIntro = await waitFor(() => {
+        const m = msgsTo("victor.abara@guard");
+        return m.length >= 1 ? m : null;
+      }, { label: "Victor's intro in the sink" });
+      victorIntro ? ok("Victor's intro delivered over real SMTP", `subject "${victorIntro[0].subject}"`) : bad("Victor intro delivered");
+
+      const COLE_SID = `SMsableridgecole${RUN.slice(-7)}`;
+      const VICTOR_SID = `SMsableridgevic${RUN.slice(-7)}`;
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `INSERT INTO "SentMessage" (id, "sendingAccountId", "enrollmentId", "contactId", channel, body, "providerMessageId", status, "sentAt", "createdAt")
+         VALUES ('smwaC${RUN}', '${wa2AccountId}', '${coleEnrId}', '${coleId}', 'WHATSAPP', 'Cole - following up about Sable Ridge', '${COLE_SID}', 'SENT', now(), now()),
+                ('smwaV${RUN}', '${wa2AccountId}', '${victorEnrId}', '${victorId}', 'WHATSAPP', 'Victor - following up about Sable Ridge', '${VICTOR_SID}', 'SENT', now(), now());`], { stdio: "pipe" });
+      ok("two accepted WhatsApp messages seeded in queue.ts's shape — one thread each, one outcome apiece", `${COLE_SID} / ${VICTOR_SID}`);
+
+      const postWaStatus = async (messageSid, toPhone, params) => {
+        const raw = new URLSearchParams({
+          MessageSid: messageSid, MessageStatus: params.status,
+          From: "whatsapp:+14155550111", To: `whatsapp:${toPhone}`,
+        }).toString();
+        const ts = String(Math.floor(Date.now() / 1000));
+        const sig = crypto.createHmac("sha256", INBOUND_SECRET).update(`${ts}.${raw}`).digest("hex");
+        const res = await fetch(`${BASE}/api/webhooks/whatsapp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", "x-inbound-timestamp": ts, "x-inbound-signature": sig },
+          body: raw,
+        });
+        return { status: res.status, text: await res.text() };
+      };
+
+      const coleSentCtl = await postWaStatus(COLE_SID, COLE_PHONE, { status: "sent" });
+      const coleTrail0 = await api(`/api/enrollments/${coleEnrId}`);
+      const coleRows0 = ((coleTrail0.json?.activities ?? [])).map((a) => a.type).sort().join(",");
+      coleSentCtl.status === 200 && coleRows0 === "SENT" && coleTrail0.json?.status === "ACTIVE"
+        ? ok("a corroborating sent is acknowledged and writes nothing — the trail holds only the worker's own send", `trail ${coleRows0}`)
+        : bad("sent callback writes nothing", `HTTP ${coleSentCtl.status}, trail ${coleRows0 || "(none)"}, status ${coleTrail0.json?.status}`);
+
+      const coleDel = await postWaStatus(COLE_SID, COLE_PHONE, { status: "delivered" });
+      const coleTrail1 = await api(`/api/enrollments/${coleEnrId}`);
+      const coleTypes1 = ((coleTrail1.json?.activities ?? [])).map((a) => a.type);
+      coleDel.status === 200 && coleTypes1.includes("DELIVERED") && coleTrail1.json?.status === "ACTIVE"
+        ? ok("the delivered receipt becomes a DELIVERED Activity row — and touches no status (the message got through)", coleTypes1.join(","))
+        : bad("delivered writes a row", `HTTP ${coleDel.status}, trail ${coleTypes1.join(",") || "(none)"}, status ${coleTrail1.json?.status}`);
+
+      await postWaStatus(VICTOR_SID, VICTOR_PHONE, { status: "delivered" });
+      const victorRead = await postWaStatus(VICTOR_SID, VICTOR_PHONE, { status: "read" });
+      const victorTrail1 = await api(`/api/enrollments/${victorEnrId}`);
+      const victorTypes1 = ((victorTrail1.json?.activities ?? [])).map((a) => a.type);
+      victorRead.status === 200 && victorTypes1.includes("OPENED") && victorTrail1.json?.status === "ACTIVE"
+        ? ok("the read receipt becomes an OPENED row — Twilio says he looked at it, the funnel believes the phone", victorTypes1.join(","))
+        : bad("read writes an OPENED row", `HTTP ${victorRead.status}, trail ${victorTypes1.join(",") || "(none)"}`);
+
+      const victorStamped = await api(`/api/contacts/${victorId}`);
+      victorStamped.json?.status === "ACTIVE"
+        ? ok("and an engagement receipt moves NO lifecycle status — contact and enrollment both untouched by the read", `contact ${victorStamped.json?.status}`)
+        : bad("read does not touch lifecycle", `contact status ${JSON.stringify(victorStamped.json?.status)}`);
+
+      const readAgain = await postWaStatus(VICTOR_SID, VICTOR_PHONE, { status: "read" });
+      const victorTrail2 = await api(`/api/enrollments/${victorEnrId}`);
+      const openRows = (victorTrail2.json?.activities ?? []).filter((a) => a.type === "OPENED").length;
+      readAgain.status === 200 && openRows === 1
+        ? ok("Twilio's redelivered receipt replays nothing — the #60 gate counts every Activity, this channel too", `OPENED activities: ${openRows}`)
+        : bad("receipt redelivery idempotent", `HTTP ${readAgain.status}, ${openRows} OPENED rows`);
+
+      // Both waits rewound a minute: the next sweep tick visits both with the
+      // same TIME_ELAPSED trigger and the same condition. Cole has a DELIVERED
+      // row and no OPENED — delivered is not an open — so his run ENDS.
+      // Victor's OPENED arrived on WHATSAPP while the guarded step is EMAIL,
+      // and hasOpen does not care: no_open fails, the step waits, the
+      // enrollment lives.
+      for (const id of [coleEnrId, victorEnrId]) {
+        execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+          `UPDATE "Enrollment" SET "nextActionAt" = now() - interval '1 minute' WHERE id = '${id}';`], { stdio: "pipe" });
+      }
+      const coleEnded = await waitFor(async () => {
+        const r = await api(`/api/enrollments/${coleEnrId}`);
+        return r.json?.status === "COMPLETED" ? r.json : null;
+      }, { timeout: 170000, label: "the sweep ends Cole's run - no_open was satisfied" });
+      coleEnded
+        ? ok("the sweep walked into no_open for the contact whose receipts stopped at delivered and ENDED the run", coleEnded.status)
+        : bad("no_open ends the unread contact", `status ${JSON.stringify((await api(`/api/enrollments/${coleEnrId}`)).json?.status)}`);
+      const coleMails = msgsTo("cole.dewitt@guard");
+      coleMails.length === 1
+        ? ok("Cole's sink holds one email, ever — the end was decided by a WhatsApp receipt that never said read", `subject "${coleMails[0].subject}"`)
+        : bad("Cole got no second email", `${coleMails.length} messages`);
+
+      const victorLive = await api(`/api/enrollments/${victorEnrId}`);
+      const victorMails = msgsTo("victor.abara@guard");
+      victorLive.json?.status === "ACTIVE" && victorMails.length === 1
+        ? ok("same condition, same rewound clock, one sweep later: Victor is ACTIVE — a WHATSAPP read stopped an EMAIL engine's no_open end", `status ${victorLive.json?.status}, ${victorMails.length} email`)
+        : bad("the OPENED row shielded Victor", `status ${JSON.stringify(victorLive.json?.status)}, ${victorMails.length} emails`);
+
+      const coleFull = await api(`/api/enrollments/${coleEnrId}`);
+      const trailTypes = (r) => (r.json?.activities ?? []).slice().reverse().map((a) => a.type).join(",");
+      const coleTrailTypes = trailTypes(coleFull);
+      const victorTrailTypes = trailTypes(victorLive);
+      coleTrailTypes === "SENT,DELIVERED" && victorTrailTypes === "SENT,DELIVERED,OPENED"
+        ? ok("the trails tell it plain: SENT,DELIVERED (email,WhatsApp) for the unread; +OPENED for the reader", `cole=${coleTrailTypes} victor=${victorTrailTypes}`)
+        : bad("engagement trails", `cole=${coleTrailTypes} victor=${victorTrailTypes}`);
+
+      const wsIdForEng = (await api(`/api/campaigns/${campaignHId}`)).json?.workspaceId;
+      const attrEng = await waitFor(async () => {
+        const a = await api(`/api/analytics/${wsIdForEng}?type=attribution&days=1`);
+        return a.json?.drift?.length === 0 ? a.json : null;
+      }, { timeout: 30000, label: "attribution agreeing after the WhatsApp receipts" });
+      const engByCh = Object.fromEntries((attrEng?.byChannel ?? []).map((r) => [r.key, r]));
+      engByCh.WHATSAPP?.delivered === 2 && engByCh.WHATSAPP?.opened === 1
+        ? ok("the dashboard counts a WhatsApp open for the first time — delivered 2, opened 1, and the fold cannot tell which channel asked", JSON.stringify(attrEng.byChannel.map((r) => `${r.key}:${r.delivered}/${r.opened}`)))
+        : bad("attribution counts WhatsApp engagement", JSON.stringify(attrEng?.byChannel));
+    } else {
+      console.log("  (DATABASE_URL unset: skipped the WhatsApp engagement-receipt proof — it needs the seeded SentMessages)");
     }
 
     // ------------------------------------------------------------ summary --

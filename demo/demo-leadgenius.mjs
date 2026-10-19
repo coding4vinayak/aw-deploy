@@ -101,22 +101,32 @@
 // five** and park two ACTIVE with the reason in the response; one live
 // bounce relabel keeps the eighth refused; one nightly pass raises the cap
 // and the next sweep tick delivers all eight, the bounced row still spent.
+// And because LinkedIn's messaging API has no feedback loop — no webhook
+// will ever say *this recipient is gone* — step [19] stands the host in
+// (`LINKEDIN_API_BASE` → an in-process stub) and reads the send-time
+// rejection as the channel's only voice: the recipient-named 400 and the
+// no-URL contact write the email webhook's bounce lifecycle, the 429 that
+// accuses only the hour moves nothing.
 //
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
+// LI_PORT (default 3399 — step [19]'s LinkedIn stub host; the app must see
+// LINKEDIN_API_BASE=http://127.0.0.1:$LI_PORT, which run-demo.sh exports) ·
 // DATABASE_URL (enables the hygiene reset + DB cross-check; recommended)
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { startCapture } from "./capture.mjs";
 import { startSmtpSink } from "./smtp-sink.mjs";
+import { startLinkedInStub } from "./linkedin-stub.mjs";
 
 const BASE = process.env.APP_BASE || "http://localhost:3200";
 const KEY = process.env.API_KEY;
 const INBOUND_SECRET = process.env.INBOUND_SECRET;
 const HOOK_PORT = Number(process.env.HOOK_PORT || 3799);
 const SINK_PORT = Number(process.env.SINK_PORT || 2525);
+const LI_PORT = Number(process.env.LI_PORT || 3399);
 const DATABASE_URL = process.env.DATABASE_URL;
 const EVIDENCE_FILE = process.env.EVIDENCE_FILE;
 
@@ -237,6 +247,15 @@ async function main() {
 
   const capture = await startCapture(HOOK_PORT);
   const sink = await startSmtpSink(SINK_PORT);
+  // Step [19]'s LinkedIn host. If something else owns the port, the block
+  // says so and skips rather than inventing a pass: with no listener the app
+  // would only ever see ECONNREFUSED, which proves nothing about rejections.
+  let liStub = null;
+  try {
+    liStub = await startLinkedInStub(LI_PORT);
+  } catch (error) {
+    console.log(`  (linkedin stub could not bind :${LI_PORT} — ${error.message}; step [19] will be skipped)`);
+  }
   const msgsTo = (email) => sink.messages.filter((m) => (m.to || []).some((t) => t.includes(email)));
 
   try {
@@ -1775,6 +1794,176 @@ async function main() {
       console.log("  (DATABASE_URL unset: skipped the cap proof — it flips row statuses and rewinds clocks through psql)");
     }
 
+    // ------------------------------------------------- [19] linkedin --
+    console.log("\n[19] LinkedIn speaks only at send time: a rejection that names the recipient writes the bounce lifecycle; one that names the hour moves nothing");
+
+    if (!DATABASE_URL) {
+      console.log("  (DATABASE_URL unset: skipped the send-time rejection proof — it reads the worker's lifecycle writes straight from the ledger)");
+    } else if (!liStub) {
+      console.log(`  (linkedin stub not listening on :${LI_PORT}: skipped step [19] — the app would only see ECONNREFUSED, which proves nothing)`);
+    } else {
+      const liAcct = await api("/api/sending-accounts", {
+        method: "POST",
+        body: {
+          name: "Ridgeview LinkedIn (stub)",
+          channel: "LINKEDIN",
+          provider: "LINKEDIN_API",
+          config: { accessToken: "stub-token", userUrn: "urn:li:person:ridgeview-sam" },
+        },
+      });
+      const liId = pickId(liAcct.json, "sendingAccount");
+      const liGet = await api(`/api/sending-accounts/${liId}`);
+      liId && liGet.json?.channel === "LINKEDIN" && liGet.json?.warmupStage === 0 && liGet.json?.dailyLimit === 100
+        ? ok("a LinkedIn sender: no webhook behind it, its own 100/day and no ramp between it and the stub", liId)
+        : bad("linkedin sending account", JSON.stringify(liGet.json).slice(0, 200));
+
+      const tLi = await api("/api/templates", {
+        method: "POST",
+        body: { name: "LinkedIn note", channel: "LINKEDIN", body: "Hi {{firstName}}, quick thought for {{company}}." },
+      });
+      const tLiId = pickId(tLi.json, "template");
+      tLiId ? ok("LinkedIn template created", tLiId) : bad("LinkedIn template", `HTTP ${tLi.status}`);
+
+      const campL = await api("/api/campaigns", { method: "POST", body: { name: "One-shot LinkedIn note", goal: "Prove the send-time rejection is this channel's only bounce" } });
+      const campaignLId = pickId(campL.json, "campaign");
+      await api(`/api/campaigns/${campaignLId}`, { method: "PATCH", body: { status: "ACTIVE" } });
+      const seqL = await api("/api/sequences", {
+        method: "POST",
+        body: {
+          name: "LinkedIn: one note, due at once",
+          channel: "LINKEDIN",
+          campaignId: campaignLId,
+          stepsConfig: [{ stepNumber: 1, channel: "LINKEDIN", templateId: tLiId, delayDays: 0, delayHours: 0 }],
+        },
+      });
+      const sequenceLId = pickId(seqL.json, "sequence");
+      sequenceLId ? ok("one-step LinkedIn sequence ACTIVE at the stub", sequenceLId) : bad("linkedin sequence", JSON.stringify(seqL.json).slice(0, 160));
+
+      const liEmail = (first) => `${first}.li@${RUN.slice(-6)}.dev`;
+      const mkLiContact = async (first, url) => {
+        const id = await mkContact({
+          email: liEmail(first),
+          firstName: first[0].toUpperCase() + first.slice(1),
+          lastName: "Reach Row",
+          company: "Reachability Gate",
+          title: "Operations Lead",
+          ...(url ? { linkedinUrl: url } : {}),
+        });
+        return id;
+      };
+      const slug = (first) => `https://www.linkedin.com/in/${first}-reach-liabw-${RUN.slice(-6)}`;
+      const pimId = await mkLiContact("pim", slug("pim"));
+      const liamId = await mkLiContact("liam", slug("liam"));
+      const ninaId = await mkLiContact("nina", slug("nina"));
+      const odinId = await mkLiContact("odin", null);
+
+      const liRows = () => {
+        const out = execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-F", "|", "-c",
+          `SELECT c."firstName", m.status, m."providerMessageId", e.status, coalesce(m.error,'') FROM "SentMessage" m JOIN "Contact" c ON c.id = m."contactId" JOIN "Enrollment" e ON e.id = m."enrollmentId" WHERE m."sendingAccountId" = '${liId}' AND c.email IN ('${liEmail("pim")}','${liEmail("liam")}','${liEmail("nina")}','${liEmail("odin")}');`],
+          { stdio: "pipe" }).toString().trim();
+        return Object.fromEntries(out.split("\n").filter(Boolean).map((l) => { const p = l.split("|"); return [p[0].toLowerCase(), { row: p[1], pmid: p[2], enr: p[3], err: p.slice(4).join("|") }]; }));
+      };
+      const liActivityCount = (contactId, type) => Number(execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c",
+        `SELECT count(*) FROM "Activity" WHERE "contactId" = '${contactId}' AND type = '${type}' AND "channel" = 'LINKEDIN';`], { stdio: "pipe" }).toString().trim());
+      const trailOf = async (enrollmentId) => {
+        const g = await api(`/api/enrollments/${enrollmentId}`);
+        return {
+          status: g.json?.enrollment?.status ?? g.json?.status,
+          trail: (g.json?.activities ?? []).slice().reverse().map((a) => a.type).join(","),
+        };
+      };
+      const idsOf = { pim: pimId, liam: liamId, nina: ninaId, odin: odinId };
+      const enrIds = {};
+      for (const who of ["pim", "liam", "nina", "odin"]) {
+        const r = await api("/api/enrollments", { method: "POST", body: { contactId: idsOf[who], sequenceId: sequenceLId, campaignId: campaignLId } });
+        enrIds[who] = r.json?.enrollment?.id;
+      }
+
+      let rows = {};
+      let settled = false;
+      for (let i = 0; i < 60 && !settled; i++) {
+        rows = liRows();
+        settled = ["pim", "liam", "nina", "odin"].every((w) => rows[w] && (rows[w].row === "SENT" || rows[w].row === "FAILED"));
+        if (!settled) await sleep(500);
+      }
+      settled
+        ? ok("four due enrolls, four send attempts the ledger already settled", ["pim", "liam", "nina", "odin"].map((w) => `${w}:${rows[w].row}`).join(" "))
+        : bad("linkedin sends settled", JSON.stringify(rows).slice(0, 300));
+
+      const pim = rows.pim;
+      const pimTrail = await trailOf(enrIds.pim);
+      pim?.row === "SENT" && (pim.pmid ?? "").startsWith("li-stub") && pimTrail.trail === "SENT" && pimTrail.status === "COMPLETED"
+        ? ok("the reachable one: provider id, its own SENT activity, COMPLETED — the stub's 200 walked the normal path", `pmid ${pim.pmid}`)
+        : bad("accepted send", JSON.stringify({ pim, pimTrail }).slice(0, 260));
+
+      const liam = rows.liam;
+      const liamTrail = await trailOf(enrIds.liam);
+      const liamContact = await api(`/api/contacts/${liamId}`);
+      liam?.row === "FAILED" && (liam.err ?? "").includes("429") && liamTrail.status === "ACTIVE" && liamContact.json?.status === "ACTIVE"
+        && !liamTrail.trail.includes("BOUNCED") && liActivityCount(liamId, "BOUNCED") === 0
+        ? ok("a 429 that says 'recipient' accuses only the hour: the row keeps the error, nobody is marked dead, nothing is enqueued after", `enrollment ${liamTrail.status}`)
+        : bad("transient rejection moved nothing", JSON.stringify({ liam, liamTrail, contact: liamContact.json?.status }).slice(0, 300));
+
+      const nina = rows.nina;
+      let ninaMarked = "";
+      for (let i = 0; i < 30 && ninaMarked !== "BOUNCED"; i++) {
+        ninaMarked = (await api(`/api/contacts/${ninaId}`)).json?.status ?? "";
+        if (ninaMarked !== "BOUNCED") await sleep(500);
+      }
+      const ninaTrail = await trailOf(enrIds.nina);
+      nina?.row === "FAILED" && (nina.err ?? "").includes("LinkedIn API error 400") && ninaTrail.status === "BOUNCED" && ninaMarked === "BOUNCED"
+        && ninaTrail.trail.includes("BOUNCED") && liActivityCount(ninaId, "BOUNCED") === 1
+        ? ok("the recipient-named 400 wrote the email webhook's bounce lifecycle: FAILED row, BOUNCED activity (once), enrollment stopped, contact stamped", `trail ${ninaTrail.trail}`)
+        : bad("recipient-named 400 bounced", JSON.stringify({ nina, ninaTrail, marked: ninaMarked, acts: liActivityCount(ninaId, "BOUNCED") }).slice(0, 300));
+
+      const refused = await api("/api/enrollments", { method: "POST", body: { contactId: ninaId, sequenceId: sequenceLId, campaignId: campaignLId } });
+      refused.status === 409 && (refused.json?.error ?? "").includes("BOUNCED")
+        ? ok("the next campaign meets the bounce at the boundary: 409, 'only an ACTIVE contact can start an outreach'", String(refused.json?.error).slice(0, 90))
+        : bad("re-enroll refused", `HTTP ${refused.status}, error ${JSON.stringify(refused.json?.error)}`);
+
+      const odin = rows.odin;
+      const odinTrail = await trailOf(enrIds.odin);
+      let odinMarked = "";
+      for (let i = 0; i < 30 && odinMarked !== "BOUNCED"; i++) {
+        odinMarked = (await api(`/api/contacts/${odinId}`)).json?.status ?? "";
+        if (odinMarked !== "BOUNCED") await sleep(500);
+      }
+      const odinSaw = liStub.seen.some((s) => s.body.includes("odin"));
+      odin?.row === "FAILED" && (odin.err ?? "") === "Contact has no LinkedIn URL" && odinTrail.status === "BOUNCED" && odinMarked === "BOUNCED" && !odinSaw
+        ? ok("the channel function's own words count too: no URN on file is a permanent miss — the request never even left for it", `err ${odin.err}`)
+        : bad("no-URL contact bounced", JSON.stringify({ odin, odinTrail, marked: odinMarked, odinSaw }).slice(0, 300));
+
+      const remoteTries = liStub.seen.length;
+      remoteTries === 3
+        ? ok("the stub heard exactly three attempts — pim, liam, nina; the no-URL contact never reached the wire", `attempts ${remoteTries}`)
+        : bad("stub saw only remote attempts", `${remoteTries} attempts: ${liStub.seen.map((s) => (s.body.match(/urn:li:person:[^"]+/)?.[0] ?? "?")).join(" ")}`);
+
+      await api(`/api/sending-accounts/${liId}`, { method: "PATCH", body: { isActive: false } });
+      const seqL2 = await api("/api/sequences", {
+        method: "POST",
+        body: {
+          name: "LinkedIn: note with no sender",
+          channel: "LINKEDIN",
+          campaignId: campaignLId,
+          stepsConfig: [{ stepNumber: 1, channel: "LINKEDIN", templateId: tLiId, delayDays: 0, delayHours: 0 }],
+        },
+      });
+      const sequenceL2Id = pickId(seqL2.json, "sequence");
+      const enrWait = await api("/api/enrollments", { method: "POST", body: { contactId: await mkLiContact("thea", slug("thea")), sequenceId: sequenceL2Id, campaignId: campaignLId } });
+      const enrWaitId = enrWait.json?.enrollment?.id;
+      enrWait.status === 201 && (enrWait.json?.warning ?? "").includes("No active sending account") && enrWait.json?.enrollment?.status === "ACTIVE"
+        ? ok("LinkedIn shares the engine's wait, not a failure: a step with no sender parks ACTIVE with the reason named", String(enrWait.json.warning))
+        : bad("no-sender LinkedIn step parked", `HTTP ${enrWait.status}, warning ${JSON.stringify(enrWait.json?.warning)}`);
+      await api(`/api/sending-accounts/${liId}`, { method: "PATCH", body: { isActive: true } });
+
+      const liLedger = execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-F", "|", "-c",
+        `SELECT count(*), count(*) FILTER (WHERE status='SENT'), count(*) FILTER (WHERE status='FAILED') FROM "SentMessage" WHERE "sendingAccountId" = '${liId}' AND "contactId" IN ('${pimId}','${liamId}','${ninaId}','${odinId}');`],
+        { stdio: "pipe" }).toString().trim();
+      liLedger === "4|1|3"
+        ? ok("the day's LinkedIn ledger: one SENT, three FAILED — and only two of those failures accused a person", `rows|sent|failed = ${liLedger}`)
+        : bad("linkedin ledger shape", liLedger);
+    }
+
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);
     console.log(`\n═══ ${checks.length - failed.length}/${checks.length} checks passed ═══`);
@@ -1802,6 +1991,7 @@ async function main() {
     process.exitCode = failed.length ? 1 : 0;
   } finally {
     await sink.close();
+    if (liStub) await liStub.close();
     await capture.close();
   }
 }

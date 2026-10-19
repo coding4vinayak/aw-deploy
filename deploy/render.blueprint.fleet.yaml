@@ -29,7 +29,9 @@
 #      path to wherever this file lives (default render.yaml; custom path allowed).
 #   3. Render asks for the `sync: false` values — every one is a third-party
 #      secret (Stripe / Resend / LLM). Leave any blank to launch without that
-#      feature; the app still boots and sells the rest.
+#      feature; the app still boots and sells the rest. The generated values
+#      (`ENCRYPTION_KEY`, `INBOUND_WEBHOOK_SIGNING_SECRET`) are created by
+#      Render — leave them alone.
 #   4. First deploy runs `prisma migrate deploy` itself — tables create themselves.
 #   5. DNS (Cloudflare): point each custom domain's CNAME at its onrender.com
 #      host, then purge cache. The old wildcard record currently aims at the
@@ -169,6 +171,10 @@ services:
         sync: false
       - key: LLM_MODEL
         sync: false
+      - key: LLM_TIMEOUT_MS
+        sync: false       # optional; default 12000
+      - key: SESSION_COOKIE
+        sync: false       # optional cookie name; default abetworks_session
 
   - type: web
     name: aw-abetagent
@@ -218,6 +224,10 @@ services:
         sync: false
       - key: LLM_BASE_URL
         sync: false
+      - key: LLM_TIMEOUT_MS
+        sync: false       # optional; default 12000
+      - key: SESSION_COOKIE
+        sync: false       # optional cookie name; default abetworks_session
 
   - type: web
     name: aw-abetflow
@@ -247,7 +257,9 @@ services:
           type: keyvalue
           name: aw-abetflow-kv
           property: connectionString
-      # Encrypts stored credentials — Render generates a strong value for you
+      # Encrypts stored credentials. Render generates a base64-encoded 256-bit
+      # value; the app accepts that as-is (as it does 64 hex chars from
+      # `openssl rand -hex 32`).
       - key: ENCRYPTION_KEY
         generateValue: true
       - key: RESEND_API_KEY
@@ -264,6 +276,10 @@ services:
         sync: false
       - key: LLM_MODEL
         sync: false
+      - key: LLM_TIMEOUT_MS
+        sync: false       # optional; default 12000
+      - key: SESSION_COOKIE
+        sync: false       # optional cookie name; default abetworks_session
 
   - type: web
     name: aw-leadgenius
@@ -302,6 +318,10 @@ services:
         sync: false
       - key: STRIPE_PRICE_USER_ANNUAL
         sync: false
+      - key: SESSION_COOKIE
+        sync: false       # optional; defaults to abetworks_session
+      - key: PRODUCT_NAME
+        sync: false       # the name mail says (default: Abetworks)
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM
@@ -310,12 +330,16 @@ services:
         sync: false
       - key: EMAIL_WEBHOOK_TOKEN
         sync: false
+      - key: LINKEDIN_API_BASE
+        sync: false       # optional; LinkedIn API base (default https://api.linkedin.com)
       - key: LLM_API_KEY
         sync: false
       - key: LLM_BASE_URL
         sync: false
       - key: LLM_MODEL
         sync: false
+      - key: LLM_TIMEOUT_MS
+        sync: false       # optional; default 12000
 
   - type: web
     name: aw-leadworks
@@ -367,6 +391,10 @@ services:
         sync: false
       - key: LLM_MODEL
         sync: false
+      - key: LLM_TIMEOUT_MS
+        sync: false       # optional; default 12000
+      - key: SESSION_COOKIE
+        sync: false       # optional cookie name; default abetworks_session
 
   - type: web
     name: aw-abetConnect
@@ -408,6 +436,14 @@ services:
       # LLM request timeout in ms (blank = 12000)
       - key: LLM_TIMEOUT_MS
         sync: false
+      - key: RESEND_API_KEY
+        sync: false       # optional; without a provider mail is logged, not sent
+      - key: EMAIL_FROM
+        sync: false       # e.g. "Abetworks <noreply@abetworks.in>"
+      - key: EMAIL_WEBHOOK_URL
+        sync: false       # alternative to Resend; same {from,to,subject,html,text} JSON
+      - key: EMAIL_WEBHOOK_TOKEN
+        sync: false       # sent as Authorization: Bearer to EMAIL_WEBHOOK_URL
       # Password for the first admin account the seed creates
       - key: SEED_PASSWORD
         sync: false
@@ -451,3 +487,7 @@ services:
         sync: false
       - key: LLM_MODEL
         sync: false
+      - key: LLM_TIMEOUT_MS
+        sync: false       # optional; default 12000
+      - key: SESSION_COOKIE
+        sync: false       # optional cookie name; default abetworks_session

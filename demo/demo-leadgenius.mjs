@@ -78,6 +78,17 @@
 // #60 gate (one OPENED row), corroborating `sent` writes nothing, and the
 // attribution table shows WHATSAPP opens for the first time.
 //
+// Step [17] lets that receipt DECIDE. Before `elseThen`, an unsatisfied wait
+// condition meant wait forever — `{if: "no_open", then: "end"}` ended the
+// unread and PARKED the opened, ACTIVE and overdue, silently declined by the
+// sweep every minute. One step now says both: Quinn (signed `read`, [16]'s
+// callback) has the nudge **SENT by the else branch**; Rachel, who never
+// receives a receipt, has her run **ENDED by the then branch** — same
+// sequence, same SQL-rewound clock, opposite actions, and the only difference
+// is the receipt. The boundary control is live too: an `{if: "replied",
+// elseThen: ...}` sequence is **400ed by name** — the else of an event
+// condition would fire on every other trigger.
+//
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
@@ -1465,6 +1476,162 @@ async function main() {
         : bad("attribution counts WhatsApp engagement", JSON.stringify(attrEng?.byChannel));
     } else {
       console.log("  (DATABASE_URL unset: skipped the WhatsApp engagement-receipt proof — it needs the seeded SentMessages)");
+    }
+
+    // ------------------------------------------------------------ step else [17] --
+    // Round [16] made a read receipt a fact the engine could SEE; this round is
+    // the fact it can ACT on. Before `elseThen`, an unsatisfied wait-condition
+    // meant wait forever: `{if: "no_open", then: "end"}` ended the unread and
+    // PARKED the opened — ACTIVE, overdue, silently declined by the sweep every
+    // minute with no next action and nothing to tell anyone. "Nudge the
+    // readers, end the unread" was inexpressible. Now one step says both, and
+    // the only difference between the two contacts below is last round's
+    // signed `read`. The 400 on `{if: "replied", elseThen: ...}` is posted
+    // first, live: the else of an event condition is "this event did not just
+    // happen" — true of every other trigger — and the boundary refuses to
+    // build a step that would fire on the first unrelated callback.
+    console.log("\n[17] elseThen: one condition, both decisions — the reader is nudged, the unread ends, the event-else is refused");
+
+    if (DATABASE_URL) {
+      const campI = await api("/api/campaigns", { method: "POST", body: { name: "Roundsgate readers", goal: "Prove the else branch decides both ways" } });
+      const campaignIId = pickId(campI.json, "campaign");
+      campaignIId ? ok("else campaign created", campaignIId) : bad("else campaign", JSON.stringify(campI.json).slice(0, 200));
+      await api(`/api/campaigns/${campaignIId}`, { method: "PATCH", body: { status: "ACTIVE" } });
+
+      const badSeq = await api("/api/sequences", {
+        method: "POST",
+        body: {
+          name: "The else that has no moment",
+          channel: "EMAIL",
+          campaignId: campaignIId,
+          stepsConfig: [
+            { stepNumber: 1, channel: "EMAIL", templateId: t1Id, delayDays: 0, delayHours: 0 },
+            { stepNumber: 2, channel: "EMAIL", templateId: t2Id, delayDays: 1, delayHours: 0, conditions: { if: "replied", then: "next", elseThen: "next" } },
+          ],
+        },
+      });
+      badSeq.status === 400 && /elseThen only applies to the wait conditions/.test(badSeq.json?.error ?? "")
+        ? ok("an event condition's else is refused at the boundary by name — it would fire on every other trigger", (badSeq.json?.error ?? "").slice(0, 120))
+        : bad("event-else refused", `HTTP ${badSeq.status} ${JSON.stringify(badSeq.json).slice(0, 200)}`);
+
+      const seqI = await api("/api/sequences", {
+        method: "POST",
+        body: {
+          name: "Roundsgate: nudge the readers, end the unread",
+          channel: "EMAIL",
+          campaignId: campaignIId,
+          stepsConfig: [
+            { stepNumber: 1, channel: "EMAIL", templateId: t1Id, delayDays: 1, delayHours: 0 },
+            { stepNumber: 2, channel: "EMAIL", templateId: t2Id, delayDays: 0, delayHours: 0, conditions: { if: "no_open", then: "end", elseThen: "next" } },
+          ],
+        },
+      });
+      const sequenceIId = pickId(seqI.json, "sequence");
+      sequenceIId ? ok("the both-ways sequence accepted — satisfied runs `then`, unsatisfied runs the else", sequenceIId) : bad("else sequence", JSON.stringify(seqI.json).slice(0, 200));
+
+      const wa3Acct = await api("/api/sending-accounts", {
+        method: "POST",
+        body: {
+          name: "Roundsgate WhatsApp (Twilio, sandbox — no live sends)",
+          channel: "WHATSAPP",
+          provider: "TWILIO",
+          dailyLimit: 100,
+          config: { accountSid: "ACroundsgate00000000000000000000", authToken: "sandbox-not-a-real-credential", fromNumber: "+14155550122" },
+        },
+      });
+      const wa3AccountId = pickId(wa3Acct.json, "sendingAccount");
+      wa3AccountId ? ok("third WhatsApp account — the reader's receipts post to it", wa3AccountId) : bad("third WhatsApp account", JSON.stringify(wa3Acct.json).slice(0, 200));
+
+      const QUINN_PHONE = `+15556${RUN.slice(-5)}`;
+      const quinnId = await mkContact({
+        email: `quinn.lasley@guard.${RUN.slice(-6)}.dev`,
+        firstName: "Quinn", lastName: "Lasley", company: "Roundsgate", title: "Ops Manager", phone: QUINN_PHONE,
+      });
+      const rachelId = await mkContact({
+        email: `rachel.oyelaran@guard.${RUN.slice(-6)}.dev`,
+        firstName: "Rachel", lastName: "Oyelaran", company: "Roundsgate", title: "Depot Coordinator",
+      });
+      const enrollQuinn = await api("/api/enrollments", { method: "POST", body: { contactId: quinnId, sequenceId: sequenceIId, campaignId: campaignIId } });
+      const quinnEnrId = enrollQuinn.json?.enrollment?.id;
+      enrollQuinn.status === 201 && quinnEnrId ? ok("Quinn enrolls — a signed read is coming", quinnEnrId) : bad("Quinn enrolled", `HTTP ${enrollQuinn.status} ${JSON.stringify(enrollQuinn.json).slice(0, 200)}`);
+      const enrollRachel = await api("/api/enrollments", { method: "POST", body: { contactId: rachelId, sequenceId: sequenceIId, campaignId: campaignIId } });
+      const rachelEnrId = enrollRachel.json?.enrollment?.id;
+      enrollRachel.status === 201 && rachelEnrId ? ok("Rachel enrolls — and nobody will ever hear from her phone", rachelEnrId) : bad("Rachel enrolled", `HTTP ${enrollRachel.status} ${JSON.stringify(enrollRachel.json).slice(0, 200)}`);
+
+      const quinnIntro = await waitFor(() => {
+        const m = msgsTo("quinn.lasley@guard");
+        return m.length >= 1 ? m : null;
+      }, { label: "Quinn's intro in the sink" });
+      quinnIntro ? ok("Quinn's intro delivered over real SMTP", `subject "${quinnIntro[0].subject}"`) : bad("Quinn intro delivered");
+      const rachelIntro = await waitFor(() => {
+        const m = msgsTo("rachel.oyelaran@guard");
+        return m.length >= 1 ? m : null;
+      }, { label: "Rachel's intro in the sink" });
+      rachelIntro ? ok("Rachel's intro delivered over real SMTP", `subject "${rachelIntro[0].subject}"`) : bad("Rachel intro delivered");
+
+      const QUINN_SID = `SMroundsgateq${RUN.slice(-8)}`;
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `INSERT INTO "SentMessage" (id, "sendingAccountId", "enrollmentId", "contactId", channel, body, "providerMessageId", status, "sentAt", "createdAt")
+         VALUES ('smwaQ${RUN}', '${wa3AccountId}', '${quinnEnrId}', '${quinnId}', 'WHATSAPP', 'Quinn - following up about Roundsgate', '${QUINN_SID}', 'SENT', now(), now());`], { stdio: "pipe" });
+      ok("Quinn's accepted WhatsApp thread seeded in queue.ts's shape — Rachel's has no receipts because there is nothing to receive", QUINN_SID);
+
+      const postWa = async (params) => {
+        const raw = new URLSearchParams({
+          MessageSid: QUINN_SID, MessageStatus: params.status,
+          From: "whatsapp:+14155550122", To: `whatsapp:${QUINN_PHONE}`,
+        }).toString();
+        const ts = String(Math.floor(Date.now() / 1000));
+        const sig = crypto.createHmac("sha256", INBOUND_SECRET).update(`${ts}.${raw}`).digest("hex");
+        const res = await fetch(`${BASE}/api/webhooks/whatsapp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", "x-inbound-timestamp": ts, "x-inbound-signature": sig },
+          body: raw,
+        });
+        return { status: res.status, text: await res.text() };
+      };
+
+      await postWa({ status: "delivered" });
+      const quinnRead = await postWa({ status: "read" });
+      const quinnPre = await api(`/api/enrollments/${quinnEnrId}`);
+      const quinnPreTypes = ((quinnPre.json?.activities ?? [])).slice().reverse().map((a) => a.type).join(",");
+      quinnRead.status === 200 && quinnPreTypes === "SENT,DELIVERED,OPENED"
+        ? ok("[16]'s receipts land before the clock turns — the OPENED row is the engine's to consult", quinnPreTypes)
+        : bad("receipts recorded before rewind", `HTTP ${quinnRead.status}, trail ${quinnPreTypes}`);
+
+      for (const id of [quinnEnrId, rachelEnrId]) {
+        execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+          `UPDATE "Enrollment" SET "nextActionAt" = now() - interval '1 minute' WHERE id = '${id}';`], { stdio: "pipe" });
+      }
+      const rachelEnded = await waitFor(async () => {
+        const r = await api(`/api/enrollments/${rachelEnrId}`);
+        return r.json?.status === "COMPLETED" ? r.json : null;
+      }, { timeout: 110000, label: "the sweep ENDS Rachel's unread run - the then branch" });
+      rachelEnded
+        ? ok("satisfied (never opened): the then branch runs — Rachel's run ENDS at the sweep", rachelEnded.status)
+        : bad("no_open ends the unread", `status ${JSON.stringify((await api(`/api/enrollments/${rachelEnrId}`)).json?.status)}`);
+
+      const quinnNudged = await waitFor(async () => {
+        const r = await api(`/api/enrollments/${quinnEnrId}`);
+        return r.json?.status === "COMPLETED" ? r.json : null;
+      }, { timeout: 170000, label: "Quinn's nudge sends on the else, then the last step completes - two ticks" });
+      const quinnMails = msgsTo("quinn.lasley@guard");
+      quinnNudged && quinnMails.length === 2
+        ? ok("unsatisfied (he read it): the SAME step runs the ELSE and sends the nudge — 8pm-read Quinn is not emailed tonight's-early by an event trigger, the sweep decided this", quinnMails.map((m) => m.subject).join(" | "))
+        : bad("elseThen sends the reader's nudge", `${quinnMails.length} emails, status ${JSON.stringify(quinnNudged?.status ?? (await api(`/api/enrollments/${quinnEnrId}`)).json?.status)}`);
+
+      const rachelMails = msgsTo("rachel.oyelaran@guard");
+      rachelMails.length === 1
+        ? ok("Rachel's sink holds one email, ever — end is not send", `subject "${rachelMails[0].subject}"`)
+        : bad("Rachel got no nudge", `${rachelMails.length} messages`);
+
+      const quinnFull = await api(`/api/enrollments/${quinnEnrId}`);
+      const quinnTrail = ((quinnFull.json?.activities ?? [])).slice().reverse().map((a) => a.type).join(",");
+      const rachelTrail = ((rachelEnded.activities ?? [])).slice().reverse().map((a) => a.type).join(",");
+      quinnTrail === "SENT,DELIVERED,OPENED,SENT" && rachelTrail === "SENT"
+        ? ok("the trails are the whole story: reader SENT,DELIVERED,OPENED,SENT — unread SENT and done", `quinn=${quinnTrail} rachel=${rachelTrail}`)
+        : bad("else-branch trails", `quinn=${quinnTrail} rachel=${rachelTrail}`);
+    } else {
+      console.log("  (DATABASE_URL unset: skipped the elseThen proof — it needs the seeded receipts and the rewound clocks)");
     }
 
     // ------------------------------------------------------------ summary --

@@ -1,10 +1,12 @@
 # Deploying the Abetworks suite
 
-**Status (17 Oct 2026):** the code side is done — Postgres fleet-wide, the five
+**Status (19 Oct 2026):** the code side is done — Postgres fleet-wide, the five
 Stripe billing engines merged, outbound/inbound webhooks merged everywhere, both
-blueprints merged. What remains is dashboard work: **two Blueprint imports,
-Stripe products, DNS**, then the smoke sweep. This file is the shortest true
-path through it; `deploy/smoke-test.sh` is the proof at the end.
+blueprints merged, and every env var the code reads is declared in both
+blueprints and in each app's own `render.yaml` (drift-guarded in CI). What
+remains is dashboard work: **two Blueprint imports, Stripe products, DNS**,
+then the smoke sweep. This file is the shortest true path through it;
+`deploy/smoke-test.sh` is the proof at the end.
 
 ## What actually exists (so this file can be short)
 
@@ -13,10 +15,11 @@ path through it; `deploy/smoke-test.sh` is the proof at the end.
   `aw-leadworks`, `aw-abetConnect`, `aw-abetapi`), the hub (`aw-abethub`),
   and `aw-abetpdf`.
 - **Every DB app runs Postgres** and self-migrates: `prisma migrate deploy`
-  runs on every boot, so the first deploy creates its own tables. Every app
+  runs on every boot, so the first deploy creates its own tables. Every DB app
   answers a deep `/api/health` (503 when its DB is down) — that route is also
   the Render `healthCheckPath`, so a deploy whose migrations failed never takes
-  traffic.
+  traffic. The hub and pdf answer it too: the hub probes its lead disk, pdf its
+  tool registry + data dir.
 - **Two blueprints, both in this repo:**
 
   | File | Provisions | Cost |
@@ -36,8 +39,10 @@ blueprint path to **`deploy/render.blueprint.fleet.yaml`** (Render asks for the
 path during setup; it defaults to `render.yaml`).
 
 - Render prompts for every `sync: false` var: Stripe keys/price IDs, Resend,
-  LLM keys. **Every one is optional** — leave it blank and that feature stays
-  off; the app boots and sells the rest.
+  LLM keys, mail webhooks, cookie names. **Every one is optional** — leave it
+  blank and that feature stays off; the app boots and sells the rest. The two
+  generated values (`ENCRYPTION_KEY`, `INBOUND_WEBHOOK_SIGNING_SECRET`) are
+  created by Render — leave them alone.
 - Datastores, `DATABASE_URL`/`REDIS_URL` wiring, custom domains and the
   migrate-on-boot are all in the file. Nothing to click afterwards.
 - Service names are matched in place: a later re-sync updates services, it
@@ -98,9 +103,11 @@ bash deploy/smoke-test.sh            # is every host up? — status codes
 bash deploy/acceptance/acceptance.sh # does it behave? — gates, 4xx on junk, honest copy
 ```
 
-**Grade:** every app's `/api/health` returns `{"ok":true,"db":"up"}`.
-A **503** means DB/migrations are wrong — and because the blueprint makes
-`/api/health` the health check, traffic never switched to that deploy. These exact commands were
+**Grade:** every DB app's `/api/health` returns `{"ok":true,"db":"up"}` (the
+hub answers `storage:"writable"`, pdf its tool count). A **503** means
+DB/migrations — or, for the hub/pdf, storage — are wrong, and because the
+blueprint makes `/api/health` the health check, traffic never switched to that
+deploy. These exact commands were
 rehearsed on 19 Oct on clean clones against virgin databases — the build meets
 an empty schema and works, and every app's declared `/api/health` answered
 `{"ok":true,"db":"up"}` on the first boot (five apps, 5/5 steps · 8/8 checks).

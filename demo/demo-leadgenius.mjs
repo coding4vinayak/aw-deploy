@@ -41,6 +41,13 @@
 // of winner-vs-control reply rates that this demo recomputes from the same
 // counts — and an arms-that-never-sent test is refused the verdict outright.
 //
+// Step [13] enforces the tagline: `Contact.status` is the column an operator
+// marks a person with to STOP outreach, and it used to be write-only. Here the
+// enroll boundary refuses BOUNCED / UNSUBSCRIBED / DO_NOT_CONTACT by name, and
+// a status that changes MID-sequence stops the next email at the minute sweep
+// — the demo rewinds the scheduled wait with SQL so it is the sweep's own
+// guard that halts the send, not a lucky clock.
+//
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
@@ -982,6 +989,103 @@ async function main() {
     noEvidence.status === 409 && /no sends/.test(noEvidence.json?.error ?? "")
       ? ok("naming a winner on arms that never sent is refused - confidence is earned, not declared", noEvidence.json?.error)
       : bad("no-sends refusal", `HTTP ${noEvidence.status} ${JSON.stringify(noEvidence.json)}`);
+
+    // ------------------------------------------------- contact lifecycle [13] --
+    // "Outreach that earns replies, not spam complaints" hinges on a column
+    // that used to be write-only: PATCH /api/contacts accepts BOUNCED /
+    // UNSUBSCRIBED / DO_NOT_CONTACT, and both doors that let mail out — the
+    // enroll boundary and the minute sweep — ignored it. This step checks both
+    // from the outside: three statuses refused at enroll (named), then a
+    // contact pulled mid-sequence whose rewound wait the sweep walks into
+    // instead of into the next email.
+    console.log("\n[13] Contact lifecycle: a marked-dead contact cannot be emailed — boundary and sweep");
+
+    const guardPeople = [
+      { first: "Iris", last: "Vance", company: "Hallmeet", title: "Ops Lead", status: "UNSUBSCRIBED" },
+      { first: "Omar", last: "Haddad", company: "Kestrel Yard", title: "Director", status: "DO_NOT_CONTACT" },
+      { first: "Beth", last: "Calloway", company: "Truemane Co", title: "COO", status: "BOUNCED" },
+    ];
+    for (const g of guardPeople) {
+      const gid = await mkContact({
+        email: `${g.first.toLowerCase()}.${g.last.toLowerCase()}@guard.${RUN.slice(-6)}.dev`,
+        firstName: g.first, lastName: g.last, company: g.company, title: g.title,
+      });
+      const marked = await api(`/api/contacts/${gid}`, { method: "PATCH", body: { status: g.status } });
+      if (marked.status !== 200) { bad(`${g.status} patch`, `HTTP ${marked.status}`); continue; }
+      const tryEnroll = await api("/api/enrollments", { method: "POST", body: { contactId: gid, sequenceId, campaignId } });
+      tryEnroll.status === 409 && (tryEnroll.json?.error ?? "").includes(`contact is ${g.status} — only an ACTIVE contact`)
+        ? ok(`${g.status} refused at the enroll boundary, and the error names the status`, tryEnroll.json?.error)
+        : bad(`${g.status} enroll refusal`, `HTTP ${tryEnroll.status} ${JSON.stringify(tryEnroll.json)}`);
+    }
+
+    // The mid-sequence door gets its own campaign and a two-step sequence
+    // whose nudge waits a day: step 1 goes out the moment the contact enrolls
+    // (an unscheduled first step is due), step 2's gate is a full day ahead —
+    // so nothing can race the operator marking the contact dead. The rewound
+    // nextActionAt is the point: it must be the sweep consulting the status
+    // that stops the send, not a schedule that happens not to have come due.
+    const campG = await api("/api/campaigns", { method: "POST", body: { name: "Hallmeet roster", goal: "Prove the lifecycle stops outreach" } });
+    const campaignGId = pickId(campG.json, "campaign");
+    campaignGId ? ok("lifecycle campaign created", campaignGId) : bad("lifecycle campaign", JSON.stringify(campG.json).slice(0, 200));
+    await api(`/api/campaigns/${campaignGId}`, { method: "PATCH", body: { status: "ACTIVE" } });
+
+    const seqG = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Hallmeet intro -> tomorrow nudge",
+        channel: "EMAIL",
+        campaignId: campaignGId,
+        stepsConfig: [
+          { stepNumber: 1, channel: "EMAIL", templateId: t1Id, delayDays: 1, delayHours: 0 },
+          { stepNumber: 2, channel: "EMAIL", templateId: t2Id, delayDays: 0, delayHours: 0 },
+        ],
+      },
+    });
+    const sequenceGId = pickId(seqG.json, "sequence");
+    sequenceGId ? ok("two-step sequence created (nudge scheduled a day behind the intro)", sequenceGId) : bad("lifecycle sequence", JSON.stringify(seqG.json).slice(0, 200));
+
+    const nadiaId = await mkContact({
+      email: `nadia.rossi@guard.${RUN.slice(-6)}.dev`,
+      firstName: "Nadia", lastName: "Rossi", company: "Hallmeet", title: "Head of Field Ops",
+    });
+    const enrollNadia = await api("/api/enrollments", { method: "POST", body: { contactId: nadiaId, sequenceId: sequenceGId, campaignId: campaignGId } });
+    const nadiaEnrId = enrollNadia.json?.enrollment?.id;
+    enrollNadia.status === 201 && nadiaEnrId
+      ? ok("an ACTIVE contact enrolls untouched - the guard is lifecycle, not a block", nadiaEnrId)
+      : bad("ACTIVE contact enrolls", `HTTP ${enrollNadia.status} ${JSON.stringify(enrollNadia.json).slice(0, 200)}`);
+
+    const nadiaIntro = await waitFor(() => {
+      const m = msgsTo("nadia.rossi@guard");
+      return m.length >= 1 ? m : null;
+    }, { label: "Nadia's intro in the sink" });
+    nadiaIntro ? ok("Nadia's intro went out over real SMTP", `subject "${nadiaIntro[0].subject}"`) : bad("Nadia intro delivered");
+
+    const markNadia = await api(`/api/contacts/${nadiaId}`, { method: "PATCH", body: { status: "DO_NOT_CONTACT" } });
+    markNadia.status === 200
+      ? ok("Nadia marked DO_NOT_CONTACT mid-sequence - the operator pulled the plug between emails")
+      : bad("mark DO_NOT_CONTACT", `HTTP ${markNadia.status} ${JSON.stringify(markNadia.json).slice(0, 200)}`);
+
+    if (DATABASE_URL && nadiaEnrId) {
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "Enrollment" SET "nextActionAt" = now() - interval '1 minute' WHERE id = '${nadiaEnrId}';`], { stdio: "pipe" });
+      const stopped = await waitFor(async () => {
+        const r = await api(`/api/enrollments/${nadiaEnrId}`);
+        return r.json?.status === "PAUSED" ? r.json : null;
+      }, { timeout: 110000, label: "the sweep hits the guard - Nadia's enrollment PAUSED" });
+      stopped
+        ? ok("the minute sweep rewound to a due step and STOPPED - PAUSED, not COMPLETED (a refusal must not fire sequence.completed)", stopped.status)
+        : bad("sweep guard stops the sequence", "enrollment never reached PAUSED within the sweep window");
+      const nadiaMails = msgsTo("nadia.rossi@guard");
+      nadiaMails.length === 1
+        ? ok("the sink proves it: one email to a DO_NOT_CONTACT contact, ever", `subject "${nadiaMails[0].subject}"`)
+        : bad("no second email", `${nadiaMails.length} messages in the sink`);
+      const nadiaTypes = ((stopped?.activities ?? [])).map((a) => a.type);
+      nadiaTypes.join(",") === "SENT"
+        ? ok("the trail agrees with the sink: the step that never ran recorded no send", nadiaTypes.join(","))
+        : bad("clean trail", nadiaTypes.join(",") || "(no activities)");
+    } else {
+      console.log("  (DATABASE_URL unset: skipped the sweep-rewind proof of the engine guard)");
+    }
 
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);

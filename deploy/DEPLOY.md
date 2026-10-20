@@ -58,6 +58,13 @@ The hub must stay on **Starter**: free instances sleep after ~15 min *and*
 cannot attach a disk — and the 1 GB disk at `/data` is where every captured
 lead lands (`DATA_DIR=/data`). On free, leads die on every deploy.
 
+The import also asks for the hub's **mail provider** — `RESEND_API_KEY`, or
+`MAIL_WEBHOOK_URL` for any endpoint that takes `{from, to, subject, html,
+text}`. It is skippable, and skipping it is honest rather than broken: the hub
+writes the promised report to the server log and tells the visitor exactly
+that, instead of claiming an email it never sent. Set it and the capture card
+says "Report sent ✓".
+
 ## 3. Stripe — the 5 paid apps
 
 Full, ready-to-paste CLI in **`deploy/STRIPE.md`** (≈20 minutes, test mode

@@ -23,6 +23,11 @@ All five paid apps share the same commercial shape:
 - 14-day free trial with card; after the trial the plan converts automatically
   unless canceled in the portal
 - Full product — no artificial feature gates between trial and paid
+- **Per-seat apps (LeadGenius, AbetConnect):** checkout bills every member plus
+  every live invitation; the billing portal is where seats are added or removed,
+  and a second checkout would be a second subscription. An invitation at the
+  paid count is refused until a seat is added — re-inviting an outstanding
+  address rotates the link and costs nothing.
 - Email notifications at every billing transition: trial ending, converted,
   payment recovered, canceled. Cancellation keeps the workspace and invites the
   buyer back; the four queue-backed apps also send a 7-day win-back mail.

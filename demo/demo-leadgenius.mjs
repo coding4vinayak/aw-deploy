@@ -162,6 +162,21 @@
 // the `|| ""` that mailed a zero as a blank is gone — and the value a patch
 // wrote is what the later step sends, never the one it replaced.
 //
+// And step [24] closes the hole [23] left one field over. The door asked about
+// `step.templateId`, but `executeStep` has always resolved the copy with the
+// arm's own template first: a variant's `templateId` overrides EVERY step of the
+// arm it rides. So two arms walking the SAME three steps can be promising
+// different things, and the door was checking the track's promise — an arm
+// pointing at a template that declares `{{seats}}` enrolled clean and mailed
+// "Hi ," to that cohort alone. Both doors now resolve through the one function
+// the engine uses. Proof: one sequence, three steps, two arms differing only in
+// template; the arm's contact is refused 400 by the ARM's template name (once,
+// not three times — the override is one promise), no enrollment row is written,
+// the identical request one arm over is a 201 that was never asked for `seats`,
+// the answered arm's prospect reads "12 seats open" while the control reads the
+// track's subject with no `seats` in it at all, and the patch door refuses an
+// empty replacement by the row's own variant name too.
+//
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
@@ -2708,6 +2723,228 @@ async function main() {
     others23.every((a) => seen23.get(a.id))
       ? ok("every EMAIL sender this step parked is back up", `${others23.length} accounts restored`)
       : bad("senders restored after the merge-values run", String(others23.filter((a) => !seen23.get(a.id)).map((a) => a.name)));
+
+    // ------------------------------ [24] which copy will this arm actually send --
+    console.log("\n[24] The merge door resolves the template the SEND will use — an A/B arm's own templateId is the promise, not the step's");
+
+    // #23 refused an enrollment whose sequence promised a merge token nobody
+    // answered, and it read that promise off `step.templateId`. That is not the
+    // whole answer: a variant's `templateId` overrides EVERY step of the arm it
+    // rides, which is how the engine has always picked the copy to render. So an
+    // arm pointing at a template that declares `{{seats}}` enrolled clean and
+    // mailed "Hi ," to that cohort alone. Both arms here walk the SAME three
+    // steps and differ only in copy, so the door has to ask each arm its own
+    // question — and the mail has to prove it asked the right one.
+    const camp24 = await api("/api/campaigns", {
+      method: "POST",
+      body: { name: "Arm copy promise run", goal: "Prove the merge door reads the arm's template" },
+    });
+    const camp24Id = pickId(camp24.json, "campaign");
+    await api(`/api/campaigns/${camp24Id}`, { method: "PATCH", body: { status: "ACTIVE" } });
+    camp24Id
+      ? ok("campaign for the arm-promise run created and ACTIVE", camp24Id)
+      : bad("arm-promise campaign", `HTTP ${camp24.status}`);
+
+    const ctlTpl24 = await api("/api/templates", {
+      method: "POST",
+      body: {
+        name: "Arm run: the track's own copy",
+        channel: "EMAIL",
+        subject: "{{firstName}} - a quick question",
+        body: "<p>Hi {{firstName}}, quick question about {{company}}.</p>",
+        variables: ["firstName", "company"],
+      },
+    });
+    const ctlTplId = pickId(ctlTpl24.json, "template");
+    const armTpl24 = await api("/api/templates", {
+      method: "POST",
+      body: {
+        name: "Arm run: the variant's copy",
+        channel: "EMAIL",
+        subject: "{{firstName}} - {{seats}} seats open",
+        body: "<p>Hi {{firstName}}, {{company}} has {{seats}} seats left.</p>",
+        variables: ["firstName", "company", "seats"],
+      },
+    });
+    const armTplId = pickId(armTpl24.json, "template");
+    ctlTplId && armTplId
+      ? ok("two templates on one track: the step's declares only contact columns, the arm's declares a name only metadata can answer", "seats")
+      : bad("arm-run templates", `HTTP ${ctlTpl24.status}/${armTpl24.status}`);
+
+    const seq24 = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Arm run: three steps, one track",
+        channel: "EMAIL",
+        campaignId: camp24Id,
+        // Every step carries the TRACK's template. An arm that overrides the copy
+        // overrides all three at once, so an honest door asks the arm's name
+        // ONCE — and step 1's day-long wait keeps steps 2 and 3 out of this run.
+        stepsConfig: [
+          { stepNumber: 1, channel: "EMAIL", templateId: ctlTplId, delayDays: 1, delayHours: 0 },
+          { stepNumber: 2, channel: "EMAIL", templateId: ctlTplId, delayDays: 1, delayHours: 0 },
+          { stepNumber: 3, channel: "EMAIL", templateId: ctlTplId, delayDays: 0, delayHours: 0 },
+        ],
+      },
+    });
+    const seq24Id = pickId(seq24.json, "sequence");
+    seq24Id
+      ? ok("three-step sequence created, every step on the track's own template", seq24Id)
+      : bad("arm-run sequence", JSON.stringify(seq24.json).slice(0, 200));
+
+    const ab24 = await api("/api/abtests", {
+      method: "POST",
+      body: {
+        campaignId: camp24Id,
+        name: "Same three steps, whose copy?",
+        hypothesis: "The arm that changed the copy owns the promise the send must keep",
+        variants: [
+          { name: "track_copy", weight: 50, isControl: true, sequenceId: seq24Id },
+          { name: "variant_copy", weight: 50, isControl: false, sequenceId: seq24Id, templateId: armTplId },
+        ],
+      },
+    });
+    const ab24Test = ab24.json?.abTest;
+    ab24.status === 201 && ab24Test?.status === "RUNNING" && ab24Test?.variants?.length === 2
+      ? ok("RUNNING test: one sequence, two arms, the difference is the template alone", ab24Test.variants.map((v) => v.name).join(" / "))
+      : bad("arm-promise test", `HTTP ${ab24.status} ${JSON.stringify(ab24.json).slice(0, 200)}`);
+
+    // Senders parked FIRST, so the only way a mail can leave is after the
+    // restore below — and the bytes that leave are the ones the answered
+    // enrollment produced, not a send that raced the door.
+    const acctList24 = await api("/api/sending-accounts");
+    const others24 = (acctList24.json?.accounts ?? []).filter((a) => a.channel === "EMAIL" && a.isActive);
+    for (const a of others24) await api(`/api/sending-accounts/${a.id}`, { method: "PATCH", body: { isActive: false } });
+
+    // Which arm a contact lands in is the app's sha256 arithmetic, so the demo
+    // creates until it has one prospect in each arm and re-computes the answer
+    // the same way [11] does. Contacts that fall in the other arm are left
+    // unenrolled on purpose: they are evidence of the hash, not of this rule.
+    const arm24Pool = [
+      ["Veronika", "Hale", "Ashbound Ceramics", "Owner"],
+      ["Isidore", "Bram", "Pollbook Media", "VP Ops"],
+      ["Marek", "Dvorak", "Kolin Freight", "COO"],
+      ["Talia", "Oram", "Bergamo Rows", "Head of Ops"],
+      ["Enzo", "Parisi", "Fell and Flake", "Director"],
+      ["Sanne", "Dekker", "Vliet Cold", "GM"],
+      ["Osric", "Fenn", "Tidewell Fabric", "Owner"],
+      ["Petra", "Lund", "Granary North", "VP Delivery"],
+      ["Yusuf", "Elam", "Revelry Goods", "COO"],
+      ["Birthe", "Skov", "Halden Cartage", "Director"],
+    ];
+    let arm24At = 0;
+    const contactIn = async (armName) => {
+      while (ab24Test && arm24At < arm24Pool.length) {
+        const [first, last, company, title] = arm24Pool[arm24At];
+        arm24At += 1;
+        const email = `${first.toLowerCase()}.${last.toLowerCase()}@arm.${RUN.slice(-6)}.dev`;
+        const cid = await mkContact({ email, firstName: first, lastName: last, company, title });
+        if (predictArm(ab24Test, cid) === armName) return { email, local: email.split("@")[0], cid, first, company };
+      }
+      return null;
+    };
+    const inVariant = await contactIn("variant_copy");
+    const inTrack = await contactIn("track_copy");
+    inVariant && inTrack
+      ? ok("one prospect in each arm, the assignment predicted by the app's own hash", `${inVariant.email} | ${inTrack.email}`)
+      : bad("arm contacts located", JSON.stringify({ inVariant: !!inVariant, inTrack: !!inTrack }));
+
+    const refused = await api("/api/enrollments", {
+      method: "POST",
+      body: { contactId: inVariant?.cid, sequenceId: seq24Id, campaignId: camp24Id },
+    });
+    const refusal = String(refused.json?.error ?? "");
+    refused.status === 400 && refusal.includes("{{seats}}") && refusal.includes("the variant's copy")
+      ? ok("the ARM's contact is refused by the ARM's template: the door read the copy the send will actually use", refusal.slice(0, 160))
+      : bad("arm enroll refused by its own template", `HTTP ${refused.status} ${JSON.stringify(refused.json).slice(0, 220)}`);
+    (refusal.match(/\{\{seats\}\}/g) ?? []).length === 1
+      ? ok("three steps, ONE promise: an arm template overrides every one of them, so the same name is asked once, at the first", `step 1 of 3 — ${refusal.slice(0, 40)}…`)
+      : bad("one promise per arm template", `${(refusal.match(/\{\{seats\}\}/g) ?? []).length} mentions in ${refusal}`);
+    const fieldsMeta24 = String(refused.json?.fields?.metadata ?? "");
+    fieldsMeta24.includes("seats")
+      ? ok("and it arrives in the declared field, where a caller reads it back", fieldsMeta24.slice(0, 120))
+      : bad("fields.metadata names the arm's token", JSON.stringify(refused.json?.fields ?? refused.json).slice(0, 160));
+    if (DATABASE_URL && inVariant) {
+      const rowCount = execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c",
+        `SELECT count(*) FROM "Enrollment" WHERE "contactId" = '${inVariant.cid}';`], { stdio: "pipe" }).toString().trim();
+      rowCount === "0"
+        ? ok("a refusal at the door writes nothing: no half-promised enrollment exists", `0 rows for the arm contact`)
+        : bad("refused enroll wrote a row", `${rowCount} row(s)`);
+    }
+
+    // The control of the control: the same body, the same three steps, one arm
+    // over. Nothing is demanded, because nothing is promised — which is exactly
+    // why reading only `step.templateId` looked safe until an arm disagreed.
+    const trackEnr = await api("/api/enrollments", {
+      method: "POST",
+      body: { contactId: inTrack?.cid, sequenceId: seq24Id, campaignId: camp24Id },
+    });
+    trackEnr.status === 201 && trackEnr.json?.enrollment?.abVariant?.name === "track_copy" && trackEnr.json?.enrollment?.metadata == null
+      ? ok("the same request, one arm over, is a 201 with no metadata asked: the track's copy promises only columns", `abVariant=${trackEnr.json?.enrollment?.abVariant?.name} metadata=${JSON.stringify(trackEnr.json?.enrollment?.metadata)}`)
+      : bad("control arm enrolled unasked", `HTTP ${trackEnr.status} ${JSON.stringify(trackEnr.json).slice(0, 220)}`);
+
+    const variantEnr = await api("/api/enrollments", {
+      method: "POST",
+      body: { contactId: inVariant?.cid, sequenceId: seq24Id, campaignId: camp24Id, metadata: { seats: 12 } },
+    });
+    const variantEnrId = variantEnr.json?.enrollment?.id;
+    variantEnr.status === 201 && variantEnr.json?.enrollment?.metadata?.seats === 12
+      && variantEnr.json?.enrollment?.abVariant?.name === "variant_copy"
+      ? ok("answered, the arm enrolls — and the row carries the arm beside the value the arm asked for", `metadata=${JSON.stringify(variantEnr.json?.enrollment?.metadata)}`)
+      : bad("arm enroll with the value", `HTTP ${variantEnr.status} ${JSON.stringify(variantEnr.json).slice(0, 220)}`);
+
+    // The other door reads the same row. This enrollment is already in a cohort,
+    // so the copy its next step sends is the variant's — clearing the value the
+    // VARIANT needs must be refused by the variant's name, not judged against
+    // the step's copy, which never mentions seats at all.
+    const dropValue = await api(`/api/enrollments/${variantEnrId}`, { method: "PATCH", body: { metadata: {} } });
+    dropValue.status === 400 && String(dropValue.json?.error ?? "").includes("the variant's copy")
+      ? ok("PATCH reads the row's OWN arm: an empty replacement is refused by the variant's template name", String(dropValue.json?.error).slice(0, 150))
+      : bad("patch door ignored the arm", `HTTP ${dropValue.status} ${JSON.stringify(dropValue.json).slice(0, 220)}`);
+
+    for (const a of others24) await api(`/api/sending-accounts/${a.id}`, { method: "PATCH", body: { isActive: true } });
+
+    let variantMails = [];
+    let trackMails = [];
+    for (let waited = 0; waited < 210; waited += 5) {
+      await sleep(5000);
+      variantMails = msgsTo(`${inVariant?.local}@`);
+      trackMails = msgsTo(`${inTrack?.local}@`);
+      if (variantMails.length >= 1 && trackMails.length >= 1) break;
+    }
+    variantMails.length >= 1 && trackMails.length >= 1
+      ? ok("both arms' step-1 mail left once the senders came back", `${variantMails.length} + ${trackMails.length} message(s)`)
+      : bad("arm mails arrived", `${variantMails.length}/${trackMails.length}`);
+
+    const vSubject = variantMails[0]?.subject ?? "";
+    const vBody = variantMails[0] ? mailText(variantMails[0]) : "";
+    const vFirst = inVariant?.first ?? "~none~";
+    vSubject.includes("12 seats open") && vSubject.includes(vFirst) && vBody.includes("12 seats left") && !vBody.includes("{{")
+      ? ok("the arm's prospect read the ARM's copy with the value the door demanded: no blank, no brace", `"${vSubject}"`)
+      : bad("arm mail rendered the promise", `${vSubject} / ${vBody.slice(0, 140)}`);
+    const tSubject = trackMails[0]?.subject ?? "";
+    const tBody = trackMails[0] ? mailText(trackMails[0]) : "";
+    tSubject.includes("a quick question") && !tSubject.includes("seats") && !tBody.includes("seats")
+      ? ok("and the control read the track's copy untouched — the resolution did not leak a template between arms", `"${tSubject}"`)
+      : bad("control arm kept its own copy", `${tSubject} / ${tBody.slice(0, 140)}`);
+
+    // The cohort counts what it was sent: attribution's per-variant rollup is
+    // keyed by arm, so an arm whose mail rendered the wrong copy would show a
+    // send the comparison cannot explain.
+    const attr24 = await waitFor(async () => {
+      const a = await api(`/api/analytics/${wsIdForAttr}?type=attribution&days=1`);
+      const rows = Object.fromEntries((a.json?.byVariant ?? []).map((r) => [r.key, r]));
+      return rows.variant_copy?.sent >= 1 && rows.track_copy?.sent >= 1 ? rows : null;
+    }, { timeout: 90000, label: "both new arms counting a send in byVariant" }).catch(() => null);
+    attr24
+      ? ok("the arms that disagreed about a promise are the arms attribution counts separately", `variant_copy=${attr24.variant_copy.sent} track_copy=${attr24.track_copy.sent}`)
+      : bad("new arms counted in byVariant", "no per-variant rows for either arm");
+
+    const backUp24 = await api("/api/sending-accounts");
+    const seen24 = new Map((backUp24.json?.accounts ?? []).map((a) => [a.id, a.isActive]));
+    others24.every((a) => seen24.get(a.id))
+      ? ok("every EMAIL sender this step parked is back up", `${others24.length} accounts restored`)
+      : bad("senders restored after the arm-promise run", String(others24.filter((a) => !seen24.get(a.id)).map((a) => a.name)));
 
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);

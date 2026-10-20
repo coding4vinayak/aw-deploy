@@ -2278,7 +2278,7 @@ async function main() {
     // prospect's inbox. Both write doors now read it against the text, so the
     // honest template is the only one that can be stored.
     const honestSubject = "{{firstName}} - a note for {{company}}";
-    const honestBody = "<p>Hi {{firstName}},</p><p>You run operations at {{company}} as {{title}}, which is exactly who we help. Worth 15 minutes?</p><p>- Sam</p>";
+    const honestBody = "<p>Hi {{firstName}},</p><p>You run operations at {{company}} - as {{title}}, which is exactly who we help. Worth 15 minutes?</p><p>- Sam</p>";
     const vPost = await api("/api/templates", {
       method: "POST",
       body: { name: "Declared intro", channel: "EMAIL", subject: honestSubject, body: honestBody, variables: [" firstName ", "company", "firstName", "title"] },
@@ -2392,17 +2392,26 @@ async function main() {
       return m.length >= 1 ? m : null;
     }, { timeout: 120000, label: "Oto's declared-merge mail in the SMTP sink" });
 
+    // The sink keeps the bytes that actually left, and a long HTML line is
+    // quoted-printable soft-wrapped at 76 — a value can straddle a `=\r\n`,
+    // so a raw `includes` would accuse the merge of failing because the mail
+    // was well-formed. Read the message the way a mail client does.
+    const mailText = (m) => m.raw
+      .replace(/=\r?\n/g, "")
+      .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+    const idaRaw = mailText(idaMail[0]);
+    const otoRaw = mailText(otoMail[0]);
+
     const idaRenders = idaMail[0].subject.includes("Ida") && idaMail[0].subject.includes("Kestrel Freight")
-      && idaMail[0].raw.includes("Head of Ops") && !/[{\[<{]\{/.test(idaMail[0].raw);
+      && idaRaw.includes("Head of Ops") && !idaRaw.includes("{{");
     idaRenders
       ? ok("the declaration the boundary checked is the vocabulary the SEND filled: Ida's own row, in Ida's mail", `subject "${idaMail[0].subject}"`)
       : bad("Ida's merge did not render", `${idaMail[0].subject} / ${snippet(idaMail[0].raw)}`);
     const otoRenders = otoMail[0].subject.includes("Oto") && otoMail[0].subject.includes("Barium Cold Chain")
-      && otoMail[0].raw.includes("Director of Fulfillment") && !otoMail[0].raw.includes("Kestrel Freight");
+      && otoRaw.includes("Director of Fulfillment") && !otoRaw.includes("Kestrel Freight");
     otoRenders
       ? ok("same template, other contact, other values — one list drives both the check and the fill, per row", `subject "${otoMail[0].subject}"`)
       : bad("Oto's merge did not render", `${otoMail[0].subject} / ${snippet(otoMail[0].raw)}`);
-
     // The column, read as storage: what went in through the boundary is the
     // array itself — no wrapper, no stringified echo.
     if (DATABASE_URL) {
@@ -2475,7 +2484,7 @@ async function main() {
     receiptOk
       ? ok("the send waited for the value: it left only when the seeded row and the returning sender met on a sweep tick", `sink receipt ${solMail[0].receivedAt}`)
       : bad("metadata-half mail raced the seed", String(solMail[0].receivedAt));
-    solMail[0].subject.includes("Tuesday at ten") && solMail[0].subject.includes("Sol") && !solMail[0].raw.includes("{{")
+    solMail[0].subject.includes("Tuesday at ten") && solMail[0].subject.includes("Sol") && !mailText(solMail[0]).includes("{{")
       ? ok("the non-column name in the SAME declaration filled from the enrollment it rides: subject, not snippet", `subject "${solMail[0].subject}"`)
       : bad("metadata token did not render", solMail[0].subject + " / " + snippet(solMail[0].raw));
     for (const a of others22) await api(`/api/sending-accounts/${a.id}`, { method: "PATCH", body: { isActive: true } });

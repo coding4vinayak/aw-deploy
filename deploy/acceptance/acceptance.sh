@@ -277,13 +277,22 @@ check_site() {
   check_front "$base"
   c=$(get_code "$base/llms.txt"); b=$(get_body "$base/llms.txt")
   if [ "$c" = 200 ]; then
-    if printf '%s' "$b" | grep -q '## Products'; then
-      ok 'site llms.txt (AI index)' 'products section present'
+    # Shape first, then truth. The index must have a title and sections, and
+    # every path it names must exist on this deployment — the check that
+    # catches an index pointing at pages the site does not have. (The paths are
+    # probed against the host being checked, because the absolute origin in
+    # the file is the canonical domain, which is a separate concern: the
+    # front-page probe above already reports on it.)
+    if ! printf '%s' "$b" | head -1 | grep -q '^# '; then
+      bad 'site llms.txt (AI index)' 'served but no title line'
+    elif ! printf '%s' "$b" | grep -q '^## '; then
+      bad 'site llms.txt (AI index)' 'served but no sections'
     else
-      bad 'site llms.txt (AI index)' 'served but missing the Products index'
+      ok 'site llms.txt (AI index)' "$(printf '%s' "$b" | grep -c '^## ') sections"
+      check_index_paths "$base" "$b"
     fi
   else
-    skip 'site llms.txt (AI index)' "$c — apply deploy/site-ai-pack/ once the site repo is identified"
+    skip 'site llms.txt (AI index)' "$c — apply deploy/site-ai-pack/ (the site repo is now identified)"
   fi
   c=$(get_code "$base/openapi.json"); b=$(get_body "$base/openapi.json")
   if [ "$c" = 200 ]; then
@@ -302,6 +311,99 @@ check_site() {
     ok 'site robots.txt AI directives' 'GPTBot block present'
   else
     skip 'site robots.txt AI directives' 'allow-list serves; the AI block ships with deploy/site-ai-pack/'
+  fi
+  check_site_sitemap "$base"
+}
+
+# Every path an index names must exist on the site that published it. An
+# index that links pages which 404 tells an AI assistant the site is bigger
+# than it is — and the site this pack was first written for had exactly that
+# problem: a sitemap advertising 32 dead URLs.
+check_index_paths() {
+  local base="${1%/}" body="$2" paths path dead=0 total=0 first=""
+  paths=$(printf '%s' "$body" \
+    | grep -oE '\]\(https?://[^)]+\)|^- +https?://[^ ]+' \
+    | sed -E 's/^\]\(//; s/\)$//; s/^- +//' \
+    | sed -E 's#^[a-z]+://[^/]+##' \
+    | sed -E 's/[?#].*$//' \
+    | sed -E 's#^$#/#' | sort -u)
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    case "$path" in /sitemap.xml|/llms.txt) continue ;; esac
+    total=$((total + 1))
+    local code
+    code=$(get_code "$base$path")
+    if ! is_ok_or_redirect "$code"; then
+      dead=$((dead + 1))
+      [ -z "$first" ] && first="$path → $code"
+    fi
+  done <<< "$paths"
+  if [ "$total" -eq 0 ]; then
+    bad 'site llms.txt links real pages' 'the index names no pages at all'
+  elif [ "$dead" -gt 0 ]; then
+    bad 'site llms.txt links real pages' "$dead of $total do not resolve (first: $first)"
+  else
+    ok 'site llms.txt links real pages' "$total paths resolve"
+  fi
+}
+
+# The site's sitemap may point at other hosts on purpose — it links the
+# Abetworks product suite — so the "must be this host" rule the app hosts use
+# does not apply. The rule that does apply is the same everywhere: every URL
+# it lists must resolve.
+check_site_sitemap() {
+  local base="${1%/}" c b urls n dead=0 total=0 first="" host
+  c=$(get_code "$base/sitemap.xml"); b=$(get_body "$base/sitemap.xml")
+  if [ "$c" != 200 ]; then
+    bad 'site sitemap.xml serves' "sitemap.xml → $c"
+    return
+  fi
+  if ! printf '%s' "$b" | grep -q '<urlset'; then
+    bad 'site sitemap.xml is a urlset' 'served but no <urlset>'
+    return
+  fi
+  urls=$(printf '%s' "$b" | tr -d '\n\r' | grep -oE '<loc>[^<]+</loc>' | sed -E 's#</?loc>##g' | sed 's/&amp;/\&/g')
+  n=$(printf '%s' "$urls" | grep -c . || true)
+  if [ "$n" -lt 1 ]; then
+    bad 'site sitemap.xml lists pages' 'served but no <loc>'
+    return
+  fi
+  # Only this domain and its own subdomains: a sitemap that advertises
+  # somebody else's host is a copy-paste accident.
+  while IFS= read -r url; do
+    [ -z "$url" ] && continue
+    host=$(printf '%s' "$url" | sed -E 's#^[a-z]+://##; s#/.*$##; s#:[0-9]+$##')
+    case "$host" in
+      abetworks.in|*.abetworks.in) ;;
+      *) bad 'site sitemap.xml lists this domain' "$url is not on abetworks.in"; return ;;
+    esac
+  done <<< "$urls"
+  ok 'site sitemap.xml serves the page list' "sitemap → 200, $n urls"
+  # A URL on the canonical domain is checked by its PATH on the deployment
+  # being swept: the domain is a separate concern (the front-page probe above
+  # reports on it), and what matters here is that the page exists. A URL on
+  # another host is a different deployment and is checked as it is.
+  while IFS= read -r url; do
+    [ -z "$url" ] && continue
+    total=$((total + 1))
+    local path target host
+    path=$(printf '%s' "$url" | sed -E 's#^[a-z]+://[^/]+##; s/[?#].*$//')
+    [ -z "$path" ] && path="/"
+    host=$(printf '%s' "$url" | sed -E 's#^[a-z]+://##; s#/.*$##; s#:[0-9]+$##')
+    case "$host" in
+      abetworks.in|www.abetworks.in) target="$base$path" ;;
+      *) target="$url" ;;
+    esac
+    c=$(get_code "$target")
+    if ! is_ok_or_redirect "$c"; then
+      dead=$((dead + 1))
+      [ -z "$first" ] && first="$url → $c"
+    fi
+  done <<< "$urls"
+  if [ "$dead" -gt 0 ]; then
+    bad 'site sitemap.xml pages resolve' "$dead of $total dead (first: $first)"
+  else
+    ok 'site sitemap.xml pages resolve' "$total urls resolve"
   fi
 }
 

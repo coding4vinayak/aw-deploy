@@ -27,10 +27,17 @@ All five paid apps share the same commercial shape:
   every live invitation; the billing portal is where seats are added or removed,
   and a second checkout would be a second subscription. An invitation at the
   paid count is refused until a seat is added — re-inviting an outstanding
-  address rotates the link and costs nothing.
+  address rotates the link and costs nothing. Stripe's customer portal must have
+  **customers can update subscription quantities** enabled, or the buyer cannot
+  self-serve the upgrade.
 - Email notifications at every billing transition: trial ending, converted,
   payment recovered, canceled. Cancellation keeps the workspace and invites the
   buyer back; the four queue-backed apps also send a 7-day win-back mail.
+- **Data export (AbetConnect):** owners and admins can download the whole
+  workspace — contacts, conversations, messages, score signals, drafts, team,
+  pending invitations and webhook destinations — as one JSON file from
+  **Team → Your data**. Credentials and billing are deliberately excluded, and a
+  member cannot take the workspace in one request.
 
 ## Buying
 

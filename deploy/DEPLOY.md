@@ -127,7 +127,11 @@ Then the sales walk, per paid app in a fresh private window:
 2. Portal → cancel → status shows `cancel_at_period_end` → resume.
 3. Webhook replay page: one delivery delivered, one retried.
 4. Password-reset email arrives (needs Resend configured).
-5. Re-run `npx prisma migrate deploy` → "No pending migrations".
+5. **AbetConnect only:** Team → **Your data** → download the JSON. It must contain
+   the workspace and the seeded conversation, and must contain no `passwordHash`,
+   `tokenHash`, `secret` or `stripe` keys; signed out, `/api/export` is 401, and
+   a member session gets 403.
+6. Re-run `npx prisma migrate deploy` → "No pending migrations".
 
 When the walk passes on test keys, redo Stripe in **live** mode, swap the env
 vars, re-run the smoke sweep — then the suite is sellable.

@@ -122,6 +122,15 @@
 // account. The throttled calendar pass is the same arithmetic on a timer
 // (unit-tested; in a two-minute demo its 15-minute throttle makes the event
 // doors the ones that answer).
+// And step [21] gives the **default sender** its one missing reader.
+// `isDefault` had an index, and both write routes police one default per
+// channel — and `selectSendingAccount` never looked at it, so naming a
+// sender "default" changed nothing about who sent. Selection now tries the
+// default first, judged by the SAME cap: three mails ride a default whose
+// day costs exactly three, the fourth rides the idle sibling, and when the
+// sibling is NAMED default (the old one cleared by the route in the same
+// breath) the freshly-named sender carries even though the old default has
+// headroom again — the flag decides who is tried first, nothing else.
 //
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
@@ -2134,6 +2143,116 @@ async function main() {
       parked20.every((id) => backUp20.includes(id))
         ? ok("the established senders are back in play — the floor proved, and the next run's sweep will simply re-derive every score it sees", `${backUp20.length} active EMAIL accounts`)
         : bad("senders restored after the floor", backUp20.join(","));
+    }
+
+    // ------------------------------------------------- [21] isDefault ---
+    console.log("\n[21] The default sender has a reader: it is tried first, and the same cap that judges every account judges it");
+
+    if (!DATABASE_URL) {
+      console.log("  (DATABASE_URL unset: skipped the default proof — it counts rows per sending account through psql)");
+    } else {
+      const acctList21 = await api("/api/sending-accounts");
+      const parked21 = (acctList21.json?.accounts ?? []).filter((a) => a.channel === "EMAIL" && a.isActive).map((a) => a.id);
+      for (const id of parked21) await api(`/api/sending-accounts/${id}`, { method: "PATCH", body: { isActive: false } });
+      parked21.length >= 1
+        ? ok("every live EMAIL sender — round 20's survivors included — steps aside", parked21.join(", "))
+        : bad("EMAIL senders parked for the default", "the list held no active EMAIL account");
+
+      const mkAcct21 = async (fromEmail, extra) => {
+        const r = await api("/api/sending-accounts", {
+          method: "POST",
+          body: {
+            name: `Try-order sender ${fromEmail}`,
+            channel: "EMAIL",
+            provider: "SMTP",
+            dailyLimit: 200,
+            config: { host: "127.0.0.1", port: SINK_PORT, secure: false, user: "demo", pass: "demo", fromName: "Try-order", fromEmail },
+            ...extra,
+          },
+        });
+        return pickId(r.json, "sendingAccount");
+      };
+      const siblingId = await mkAcct21("sibling@try-order.dev", {});
+      const defaultId = await mkAcct21("prim@try-order.dev", { isDefault: true });
+      // The default's day costs exactly three mails: the cap it will hit.
+      await api(`/api/sending-accounts/${defaultId}`, { method: "PATCH", body: { dailyLimit: 3 } });
+      siblingId && defaultId
+        ? ok("a default whose day costs 3 and an idle sibling with 200 ahead — same sink, both sitting at the ledger's own 100", `default ${defaultId}, sibling ${siblingId}`)
+        : bad("try-order accounts", "an account was not created");
+
+      const rows21 = (id) => execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-F", "|", "-c",
+        `SELECT count(*), count(*) FILTER (WHERE status = 'SENT') FROM "SentMessage" WHERE "sendingAccountId" = '${id}';`], { stdio: "pipe" }).toString().trim();
+
+      const campD = await api("/api/campaigns", { method: "POST", body: { name: "Try-order roster", goal: "Prove the default is tried first and exempt from nothing" } });
+      const campaignDId = pickId(campD.json, "campaign");
+      await api(`/api/campaigns/${campaignDId}`, { method: "PATCH", body: { status: "ACTIVE" } });
+      const seqD = await api("/api/sequences", {
+        method: "POST",
+        body: {
+          name: "Try-order: one step, due at once",
+          channel: "EMAIL",
+          campaignId: campaignDId,
+          stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: t1Id, delayDays: 0, delayHours: 0 }],
+        },
+      });
+      const sequenceDId = pickId(seqD.json, "sequence");
+      campaignDId && sequenceDId ? ok("one due-at-once sequence drives the pair", sequenceDId) : bad("try-order sequence", JSON.stringify(seqD.json).slice(0, 160));
+
+      const dMail = (n) => msgsTo(`de.d${n}@${RUN.slice(-6)}.dev`).length;
+      const dIds = [];
+      for (let i = 0; i < 5; i++) {
+        dIds.push(await mkContact({ email: `de.d${i}@${RUN.slice(-6)}.dev`, firstName: `Dana${i}`, lastName: "Order Row", company: "Try-order", title: "Operations Lead" }));
+      }
+
+      // Ties at 100 used to be the DB's to break; the ordering makes them the
+      // flag's. Three due enrolls, one default, one sibling — all three must
+      // land on the default.
+      for (let i = 0; i <= 2; i++) await api("/api/enrollments", { method: "POST", body: { contactId: dIds[i], sequenceId: sequenceDId, campaignId: campaignDId } });
+      await waitFor(() => (dMail(0) + dMail(1) + dMail(2) >= 3 ? true : null), { timeout: 120000, label: "three due enrolls delivered" });
+      let firstSpread = "";
+      for (let i = 0; i < 20 && firstSpread !== "3|3|0|0"; i++) { firstSpread = `${rows21(defaultId)}|${rows21(siblingId)}`; if (firstSpread !== "3|3|0|0") await sleep(500); }
+      firstSpread === "3|3|0|0"
+        ? ok("the tie at 100 is no tie: three mails, ALL through the default — the flag is read on every send now, and the sibling never was tried", `default 3|3, sibling 0|0`)
+        : bad("default did not carry its tie", firstSpread);
+
+      // Priority is not exemption: the default's fourth mail has nowhere to
+      // go, and the cap — the same test the sibling lives under — steps it
+      // aside.
+      await api("/api/enrollments", { method: "POST", body: { contactId: dIds[3], sequenceId: sequenceDId, campaignId: campaignDId } });
+      await waitFor(() => (dMail(3) >= 1 ? true : null), { timeout: 120000, label: "the fourth due enroll delivered" });
+      let capped = "";
+      for (let i = 0; i < 20 && capped !== "3|3|1|1"; i++) { capped = `${rows21(defaultId)}|${rows21(siblingId)}`; if (capped !== "3|3|1|1") await sleep(500); }
+      capped === "3|3|1|1"
+        ? ok("the cap judges the default exactly like everyone else: its day cost three, the fourth rode the idle sibling — a named sender with a spent day sends nothing", `default stayed 3|3, sibling 1|1`)
+        : bad("default took a fourth mail past its cap", capped);
+
+      // The rename: the route clears the old default in the same breath, and
+      // the try-order follows the flag, not the history. Give the old
+      // default its headroom back FIRST — so the next mail riding the NEW
+      // default can only be explained by the flag.
+      await api(`/api/sending-accounts/${defaultId}`, { method: "PATCH", body: { dailyLimit: 200 } });
+      await api(`/api/sending-accounts/${siblingId}`, { method: "PATCH", body: { isDefault: true } });
+      const list21 = await api("/api/sending-accounts");
+      const emailDefaults = (list21.json?.accounts ?? []).filter((a) => a.channel === "EMAIL" && a.isDefault);
+      const primFlags = emailDefaults.map((a) => a.id).join(",");
+      primFlags === siblingId
+        ? ok("one default per channel, enforced where the flag is written: naming the sibling cleared the old default in the same breath — the list carries exactly one", `default = ${primFlags}`)
+        : bad("default rename", emailDefaults.map((a) => `${a.id}:${a.isDefault}`).join(","));
+
+      await api("/api/enrollments", { method: "POST", body: { contactId: dIds[4], sequenceId: sequenceDId, campaignId: campaignDId } });
+      await waitFor(() => (dMail(4) >= 1 ? true : null), { timeout: 120000, label: "the fifth due enroll delivered" });
+      let handed = "";
+      for (let i = 0; i < 20 && handed !== "3|3|2|2"; i++) { handed = `${rows21(defaultId)}|${rows21(siblingId)}`; if (handed !== "3|3|2|2") await sleep(500); }
+      handed === "3|3|2|2"
+        ? ok("the freshly-named default carries while the OLD one sits idle with headroom again (3 of 200 spent) — the flag decides who is tried first, and nothing else was changed", `old default stayed 3|3, new default 2|2`)
+        : bad("rename did not move the traffic", handed);
+
+      for (const id of parked21) await api(`/api/sending-accounts/${id}`, { method: "PATCH", body: { isActive: true } });
+      const reList21 = await api("/api/sending-accounts");
+      const backUp21 = (reList21.json?.accounts ?? []).filter((a) => a.channel === "EMAIL" && a.isActive).map((a) => a.id);
+      parked21.every((id) => backUp21.includes(id))
+        ? ok("the established senders return — next round's sweep re-derives their scores and the try-order simply reads whatever flag is true", `${backUp21.length} active EMAIL accounts`)
+        : bad("senders restored after the try-order", backUp21.join(","));
     }
 
     // ------------------------------------------------------------ summary --

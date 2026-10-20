@@ -23,9 +23,9 @@ All five paid apps share the same commercial shape:
 - 14-day free trial with card; after the trial the plan converts automatically
   unless canceled in the portal
 - Full product — no artificial feature gates between trial and paid
-- Email notifications at every billing transition (trial ending, converted,
-  payment recovered, canceled) and a win-back is prepared on cancel, not a
-  hostile exit flow
+- Email notifications at every billing transition: trial ending, converted,
+  payment recovered, canceled. Cancellation keeps the workspace and invites the
+  buyer back; the four queue-backed apps also send a 7-day win-back mail.
 
 ## Buying
 

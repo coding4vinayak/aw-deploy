@@ -37,7 +37,7 @@ Repeat with each row (unit amounts in cents):
 | leadworks | `stripe products create --name "LeadWorks" -d "Lead operations workspace"` | `--unit-amount 4900` | `--unit-amount 49000` |
 | abetConnect | `stripe products create --name "AbetConnect" -d "Customer conversations workspace"` | `--unit-amount 2400` | `--unit-amount 24000` |
 
-Each `prices create` prints a `price_...` id — those are the env var values. (Per-seat products: the app multiplies quantity = seats at checkout — still one monthly price + one annual price per product.)
+Each `prices create` prints a `price_...` id — those are the env var values. The two per-seat products (LeadGenius, abetConnect) put the workspace's used seats on the line-item quantity at checkout — every member plus every live invitation — so there is still one monthly price and one annual price per product.
 
 ## 2. Webhook endpoint per app (five events; Connect adds a sixth)
 
@@ -75,6 +75,8 @@ One restricted live key across the five apps is acceptable (same account) — `S
 
 Stripe → Settings → Billing → **Customer portal**: enable subscription cancel + payment method update, set "cancel at period end". This is what `STRIPE_PORTAL`/portal routes open.
 
+For the two per-seat products (LeadGenius, abetConnect), also enable **customers can update subscription quantities**. That is the upgrade path: the buyer adds a seat in the portal, Stripe sends `customer.subscription.updated`, and the app stores the new quantity as its invite cap. Without it, a team at its paid count has no way to add the next person.
+
 ## 5. Wire into Render
 
 - **Blueprint path:** the import prompts for `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and the two price IDs **per app** — paste and go.
@@ -86,6 +88,7 @@ Stripe → Settings → Billing → **Customer portal**: enable subscription can
 1. With **test keys** set, open `https://<app-domain>/pricing` → Start trial → complete with card `4242 4242 4242 4242`, any future expiry.
 2. Check Stripe → Events: `checkout.session.completed` arrives (webhook 200). In the app, plan flips to `trialing` and the trial banner shows days left.
 3. **Connect only:** three days before the trial ends, `customer.subscription.trial_will_end` arrives and the "trial ends in 3 days" mail is sent — a redelivery sends no second mail. (Use a Stripe test clock to advance to day 11 without waiting.)
-4. Open the portal link from the app → cancel → confirm `customer.subscription.updated` lands (status `cancel_at_period_end`), then resume.
-5. Re-create everything in **live mode** (rerun steps 1–4 with live keys) and swap the Render env vars. Test-mode objects don't carry over — products/prices/webhooks are per-mode.
-6. `bash smoke-test.sh` to confirm every host is still healthy after env changes.
+4. **Per-seat apps:** create a workspace with one pending invitation, open `/pricing`, and start a trial — Stripe's Checkout page must show **quantity 2** (the owner plus the invitation), and the session metadata carries `seats=2`. After the trial starts, change the quantity in the portal; `customer.subscription.updated` must leave the members page reading the new `N of M paid seats`, and a new invitation must be refused at the cap until the quantity covers it. Re-inviting the same pending address rotates the link and does not cost another seat.
+5. Open the portal link from the app → cancel → confirm `customer.subscription.updated` lands (status `cancel_at_period_end`), then resume.
+6. Re-create everything in **live mode** (rerun steps 1–5 with live keys) and swap the Render env vars. Test-mode objects don't carry over — products/prices/webhooks are per-mode.
+7. `bash smoke-test.sh` to confirm every host is still healthy after env changes.

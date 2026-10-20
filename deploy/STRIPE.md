@@ -12,7 +12,7 @@ Every billing engine is already merged; this is the **Stripe side**: products, p
 | leadworks | LeadWorks | $49/mo · $490/yr | flat | `STRIPE_PRICE_FLAT_MONTHLY` · `_ANNUAL` | `https://leadworks.abetworks.in/api/billing/webhook` |
 | abetConnect | AbetConnect | $24/mo · $240/yr **per agent** | seat | `STRIPE_PRICE_SEAT_MONTHLY` · `_ANNUAL` | `https://connect.abetworks.in/api/billing/webhook` |
 
-Annual = "two months free" on every app (matches the pricing pages). Checkout applies a **14-day free trial** on **all five apps** — card collected at checkout, first invoice on day 14, cancel in the portal before then and nothing is charged. Connect has no job queue, so it sends the trial-started and trial-converted mails but not the day-3/day-1 reminders; its members page and trial-started mail both name the first-charge date.
+Annual = "two months free" on every app (matches the pricing pages). Checkout applies a **14-day free trial** on **all five apps** — card collected at checkout, first invoice on day 14, cancel in the portal before then and nothing is charged. Connect has no job queue, so its trial-ending warning comes from Stripe's `customer.subscription.trial_will_end` **at day 3** (not the day-3 + day-1 pair the queue-backed apps send); its members page and trial-started mail also name the first-charge date.
 
 ## 1. Create products + prices (CLI, repeat per app)
 
@@ -39,7 +39,7 @@ Repeat with each row (unit amounts in cents):
 
 Each `prices create` prints a `price_...` id — those are the env var values. (Per-seat products: the app multiplies quantity = seats at checkout — still one monthly price + one annual price per product.)
 
-## 2. Webhook endpoint per app (same five events everywhere)
+## 2. Webhook endpoint per app (five events; Connect adds a sixth)
 
 ```bash
 stripe webhook_endpoints create \
@@ -51,7 +51,12 @@ stripe webhook_endpoints create \
   --enabled-events invoice.payment_failed
 ```
 
-Repeat with each webhook URL from the price book. Each response includes the signing secret (`whsec_...`) → that's `STRIPE_WEBHOOK_SECRET` for that app. (Safe to create before DNS is fixed — deliveries just fail until the domain resolves.)
+Repeat with each webhook URL from the price book. **For abetConnect only**, add
+`--enabled-events customer.subscription.trial_will_end`: Stripe sends it three
+days before a trial ends, and it is Connect's pre-charge warning (no job queue).
+The other four arm their own day-3/day-1 nudges and do not need it.
+
+Each response includes the signing secret (`whsec_...`) → that's `STRIPE_WEBHOOK_SECRET` for that app. (Safe to create before DNS is fixed — deliveries just fail until the domain resolves.)
 
 ## 3. Keys — use restricted keys, never the root secret
 
@@ -80,6 +85,7 @@ Stripe → Settings → Billing → **Customer portal**: enable subscription can
 
 1. With **test keys** set, open `https://<app-domain>/pricing` → Start trial → complete with card `4242 4242 4242 4242`, any future expiry.
 2. Check Stripe → Events: `checkout.session.completed` arrives (webhook 200). In the app, plan flips to `trialing` and the trial banner shows days left.
-3. Open the portal link from the app → cancel → confirm `customer.subscription.updated` lands (status `cancel_at_period_end`), then resume.
-4. Re-create everything in **live mode** (rerun steps 1–3 with live keys) and swap the Render env vars. Test-mode objects don't carry over — products/prices/webhooks are per-mode.
-5. `bash smoke-test.sh` to confirm every host is still healthy after env changes.
+3. **Connect only:** three days before the trial ends, `customer.subscription.trial_will_end` arrives and the "trial ends in 3 days" mail is sent — a redelivery sends no second mail. (Use a Stripe test clock to advance to day 11 without waiting.)
+4. Open the portal link from the app → cancel → confirm `customer.subscription.updated` lands (status `cancel_at_period_end`), then resume.
+5. Re-create everything in **live mode** (rerun steps 1–4 with live keys) and swap the Render env vars. Test-mode objects don't carry over — products/prices/webhooks are per-mode.
+6. `bash smoke-test.sh` to confirm every host is still healthy after env changes.

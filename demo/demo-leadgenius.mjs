@@ -177,6 +177,25 @@
 // track's subject with no `seats` in it at all, and the patch door refuses an
 // empty replacement by the row's own variant name too.
 //
+// And step [25] compares the two columns that describe one message from opposite
+// ends. `SequenceStep.channel` picks the carrier — which of email.ts, whatsapp.ts,
+// linkedin.ts renders the send — and `Template.channel` says what kind of copy the
+// row is. Each was validated at its own door against its own vocabulary and
+// NOTHING compared them, while `executeStep` takes the body from the template and
+// a subject only when the step says EMAIL. So an EMAIL step pointing at LinkedIn
+// copy had no subject to render and mailed under sendEmail's "New message"
+// fallback, and a WHATSAPP step on email copy shipped an inbox's HTML as one
+// bubble. Proof: each pairing is refused at the door by the words a prospect would
+// have read; a track declared EMAIL whose step sends WhatsApp is refused by the
+// rollup it would corrupt and the same track declared MULTI is a 201; an arm whose
+// copy is written for another carrier is judged against EVERY step of the track it
+// rides; a template's channel change is refused by the sequences it would strand
+// and allowed when nothing references it; a CALL step is told it can carry no copy
+// at all; and the send refuses a row no door ever saw — proven by pointing one
+// step at LinkedIn copy with SQL, where enroll answers 201 with a warning naming
+// both channels, the database holds no message for it and the sink receives none,
+// and the same step is legal again before the run ends.
+//
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
@@ -2945,6 +2964,307 @@ async function main() {
     others24.every((a) => seen24.get(a.id))
       ? ok("every EMAIL sender this step parked is back up", `${others24.length} accounts restored`)
       : bad("senders restored after the arm-promise run", String(others24.filter((a) => !seen24.get(a.id)).map((a) => a.name)));
+
+    // -------------------- [25] which channel carries which copy ----------------
+    console.log("\n[25] A step's channel and its template's channel must say the same thing — at every door, and at the send");
+
+    // `SequenceStep.channel` picks the carrier and `Template.channel` says what
+    // kind of copy the row is. Each was validated at its own door against its own
+    // vocabulary and nothing compared the pair, while the engine takes the BODY
+    // from the template and renders a SUBJECT only when the step says EMAIL. So an
+    // EMAIL step pointing at LinkedIn copy had no subject to render and mailed
+    // under sendEmail's "New message" fallback. Every refusal below is a request
+    // that would have produced that mail — and the last check is the one row no
+    // door ever saw, made with SQL, because the send has to refuse it too.
+    const camp25 = await api("/api/campaigns", {
+      method: "POST",
+      body: { name: "Channel fit run", goal: "Prove a step cannot carry copy written for another carrier" },
+    });
+    const camp25Id = pickId(camp25.json, "campaign");
+    await api(`/api/campaigns/${camp25Id}`, { method: "PATCH", body: { status: "ACTIVE" } });
+    camp25Id
+      ? ok("campaign for the channel-fit run created and ACTIVE", camp25Id)
+      : bad("channel-fit campaign", `HTTP ${camp25.status}`);
+
+    const tEmail25 = await api("/api/templates", {
+      method: "POST",
+      body: { name: "Channel fit: email copy", channel: "EMAIL", subject: "{{firstName}} - a quick question", body: "<p>Hi {{firstName}}, a word about {{company}}?</p>" },
+    });
+    const tLink25 = await api("/api/templates", {
+      method: "POST",
+      body: { name: "Channel fit: LinkedIn copy", channel: "LINKEDIN", body: "Hi {{firstName}}, quick thought for {{company}}." },
+    });
+    const tChat25 = await api("/api/templates", {
+      method: "POST",
+      body: { name: "Channel fit: WhatsApp copy", channel: "WHATSAPP", body: "Hi {{firstName}}, still shipping to {{company}}?" },
+    });
+    const tFree25 = await api("/api/templates", {
+      method: "POST",
+      body: { name: "Channel fit: unattached email copy", channel: "EMAIL", subject: "{{firstName}} - nothing references this", body: "<p>Hi {{firstName}}, this row is only ever edited.</p>" },
+    });
+    const eTpl = pickId(tEmail25.json, "template");
+    const liTpl = pickId(tLink25.json, "template");
+    const waTpl = pickId(tChat25.json, "template");
+    const freeTpl = pickId(tFree25.json, "template");
+    eTpl && liTpl && waTpl && freeTpl
+      ? ok("four templates written for their own carriers: three in use, one nothing references", "EMAIL / LINKEDIN / WHATSAPP / EMAIL")
+      : bad("channel-fit templates", `HTTP ${tEmail25.status}/${tLink25.status}/${tChat25.status}/${tFree25.status}`);
+
+    const pairEmailOnLinkedIn = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Channel fit: an email step on LinkedIn copy",
+        channel: "EMAIL",
+        campaignId: camp25Id,
+        stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: liTpl, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const whyLinkedIn = String(pairEmailOnLinkedIn.json?.error ?? "");
+    pairEmailOnLinkedIn.status === 400 && whyLinkedIn.includes("step 1 sends EMAIL")
+      && whyLinkedIn.includes('the template "Channel fit: LinkedIn copy" is written for LINKEDIN')
+      && whyLinkedIn.includes('"New message"')
+      ? ok("an EMAIL step on LinkedIn copy is refused by the subject it would have arrived with", whyLinkedIn.slice(0, 150))
+      : bad("EMAIL step on LINKEDIN template", `HTTP ${pairEmailOnLinkedIn.status} ${JSON.stringify(pairEmailOnLinkedIn.json).slice(0, 220)}`);
+    pickId(pairEmailOnLinkedIn.json, "sequence")
+      ? bad("the refused pairing still wrote a sequence", "a row exists that can mail a subject nobody wrote")
+      : ok("and nothing was written for it — the door refused before the sequence row existed", "no sequence");
+
+    const pairChatOnEmail = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Channel fit: a WhatsApp step on email copy",
+        channel: "WHATSAPP",
+        campaignId: camp25Id,
+        stepsConfig: [{ stepNumber: 1, channel: "WHATSAPP", templateId: eTpl, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const whyChat = String(pairChatOnEmail.json?.error ?? "");
+    pairChatOnEmail.status === 400 && whyChat.includes("step 1 sends WHATSAPP")
+      && whyChat.includes("the HTML body an inbox was written for would go out as one WHATSAPP message")
+      ? ok("a WHATSAPP step on email copy is refused by the body it would have arrived with", whyChat.slice(0, 150))
+      : bad("WHATSAPP step on EMAIL template", `HTTP ${pairChatOnEmail.status} ${JSON.stringify(pairChatOnEmail.json).slice(0, 220)}`);
+
+    // No template can be written for CALL or TASK — `TEMPLATE_CHANNELS` is three
+    // carriers — so a step on those channels has no copy it could be given. The
+    // door says so instead of storing a reference nothing would ever render.
+    const callCarryingCopy = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Channel fit: a CALL step carrying an email",
+        channel: "EMAIL",
+        campaignId: camp25Id,
+        stepsConfig: [{ stepNumber: 1, channel: "CALL", templateId: eTpl, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const whyCall = String(callCarryingCopy.json?.error ?? "");
+    callCarryingCopy.status === 400 && whyCall.includes("step 1 sends CALL")
+      && whyCall.includes("would go out as one CALL message")
+      ? ok("a CALL step is told it can carry no copy, because no copy is written for CALL", whyCall.slice(0, 150))
+      : bad("CALL step on EMAIL template", `HTTP ${callCarryingCopy.status} ${JSON.stringify(callCarryingCopy.json).slice(0, 220)}`);
+
+    const seqFit25 = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Channel fit: an email track that fits",
+        channel: "EMAIL",
+        campaignId: camp25Id,
+        // Two steps, both EMAIL, both on the email copy: the pairing this rule
+        // exists to allow, and the track the later checks stand on.
+        stepsConfig: [
+          { stepNumber: 1, channel: "EMAIL", templateId: eTpl, delayDays: 0, delayHours: 0 },
+          { stepNumber: 2, channel: "EMAIL", templateId: eTpl, delayDays: 1, delayHours: 0 },
+        ],
+      },
+    });
+    const seqFitId = pickId(seqFit25.json, "sequence");
+    seqFit25.status === 201 && seqFitId
+      ? ok("the same request with matching channels is a 201 — the rule is a comparison, not a ban", seqFitId)
+      : bad("matching EMAIL pair sequence", `HTTP ${seqFit25.status} ${JSON.stringify(seqFit25.json).slice(0, 220)}`);
+
+    // The other claim a sequence makes: its own `channel` is the heading the daily
+    // rollup files every one of its sends under (`analytics.ts` groups by
+    // `enrollment.sequence.channel`), so it is a claim about its steps.
+    const lyingTrack = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Channel fit: an email track with a WhatsApp step",
+        channel: "EMAIL",
+        campaignId: camp25Id,
+        stepsConfig: [{ stepNumber: 1, channel: "WHATSAPP", delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const whyTrack = String(lyingTrack.json?.error ?? "");
+    lyingTrack.status === 400 && whyTrack.includes("this sequence is declared EMAIL")
+      && whyTrack.includes("would be counted as EMAIL") && whyTrack.includes("Declare the sequence MULTI")
+      ? ok("a track declared EMAIL whose step sends WhatsApp is refused by the rollup it would corrupt", whyTrack.slice(0, 150))
+      : bad("EMAIL-declared track with a WHATSAPP step", `HTTP ${lyingTrack.status} ${JSON.stringify(lyingTrack.json).slice(0, 220)}`);
+
+    const mixedTrack = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Channel fit: a genuinely mixed track",
+        channel: "MULTI",
+        campaignId: camp25Id,
+        stepsConfig: [
+          { stepNumber: 1, channel: "EMAIL", delayDays: 0, delayHours: 0 },
+          { stepNumber: 2, channel: "WHATSAPP", delayDays: 1, delayHours: 0 },
+        ],
+      },
+    });
+    const mixedId = pickId(mixedTrack.json, "sequence");
+    mixedTrack.status === 201 && mixedId
+      ? ok("and the vocabulary's own word for a mixed track is the exemption: MULTI is a 201", `steps=${mixedTrack.json?.steps?.length ?? 2}`)
+      : bad("MULTI track with mixed steps", `HTTP ${mixedTrack.status} ${JSON.stringify(mixedTrack.json).slice(0, 220)}`);
+
+    // #24 established that an arm's template rides EVERY step of its track, so the
+    // copy is judged against all of them — and the refusal says how many would
+    // follow, because an operator handed thirty steps one at a time has a queue.
+    const armMismatch = await api("/api/abtests", {
+      method: "POST",
+      body: {
+        campaignId: camp25Id,
+        name: "Channel fit: an arm that cannot ride its own track",
+        hypothesis: "A variant whose copy is written for another carrier breaks every step it overrides",
+        variants: [
+          { name: "email_arm", weight: 50, isControl: true, sequenceId: seqFitId, templateId: eTpl },
+          { name: "linkedin_arm", weight: 50, isControl: false, sequenceId: seqFitId, templateId: liTpl },
+        ],
+      },
+    });
+    const whyArm = String(armMismatch.json?.error ?? "");
+    armMismatch.status === 400 && whyArm.includes('arm "linkedin_arm"') && whyArm.includes("step 1 sends EMAIL")
+      && whyArm.includes("(and 1 more step of this track would break the same way)")
+      ? ok("the arm's copy is judged against the whole track, and the refusal counts the steps that follow", whyArm.slice(0, 150))
+      : bad("A/B arm with a mismatched template", `HTTP ${armMismatch.status} ${JSON.stringify(armMismatch.json).slice(0, 220)}`);
+
+    const armFit = await api("/api/abtests", {
+      method: "POST",
+      body: {
+        campaignId: camp25Id,
+        name: "Channel fit: two arms, both email",
+        hypothesis: "Arms that fit their track are not what this rule is for",
+        variants: [
+          { name: "email_arm", weight: 50, isControl: true, sequenceId: seqFitId, templateId: eTpl },
+          { name: "subject_arm", weight: 50, isControl: false, sequenceId: seqFitId, templateId: eTpl },
+        ],
+      },
+    });
+    armFit.status === 201 && armFit.json?.abTest?.status === "RUNNING"
+      ? ok("the same test with both arms on the email copy is RUNNING — the rule refuses the pair, not the arm", `variants=${armFit.json?.abTest?.variants?.length}`)
+      : bad("fitting A/B arms", `HTTP ${armFit.status} ${JSON.stringify(armFit.json).slice(0, 220)}`);
+
+    // A patch changes a claim about rows this route cannot write, so the STORED
+    // steps are re-read and judged against the value the caller is asking for.
+    const patchLies = await api(`/api/sequences/${seqFitId}`, { method: "PATCH", body: { channel: "LINKEDIN" } });
+    const whyPatch = String(patchLies.json?.error ?? "");
+    patchLies.status === 400 && whyPatch.includes("this sequence is declared LINKEDIN") && whyPatch.includes("step 1 sends EMAIL")
+      ? ok("PATCH of the declared channel is refused by the steps already stored beneath it", whyPatch.slice(0, 150))
+      : bad("sequence PATCH to a contradicting channel", `HTTP ${patchLies.status} ${JSON.stringify(patchLies.json).slice(0, 220)}`);
+
+    const patchWidens = await api(`/api/sequences/${seqFitId}`, { method: "PATCH", body: { channel: "MULTI" } });
+    patchWidens.status === 200 && patchWidens.json?.channel === "MULTI"
+      ? ok("and the same patch to the mixed-track word is written — the door polices claims, not channels", `channel=${patchWidens.json?.channel}`)
+      : bad("sequence PATCH to MULTI", `HTTP ${patchWidens.status} ${JSON.stringify(patchWidens.json).slice(0, 220)}`);
+
+    // The template's own door, from the other side: a referenced template cannot be
+    // deleted, so changing ITS channel is the one edit that changes what a live
+    // step sends without the step being touched. It is refused by name.
+    const strandTpl = await api(`/api/templates/${eTpl}`, { method: "PATCH", body: { channel: "LINKEDIN" } });
+    const whyStrand = String(strandTpl.json?.error ?? "");
+    strandTpl.status === 400 && whyStrand.includes('sequence "Channel fit: an email track that fits"')
+      && whyStrand.includes("step 1 sends EMAIL") && whyStrand.includes("step 2 sends EMAIL")
+      ? ok("a template's channel change is refused by the steps and arms it would strand, named", whyStrand.slice(0, 150))
+      : bad("template PATCH that would strand live steps", `HTTP ${strandTpl.status} ${JSON.stringify(strandTpl.json).slice(0, 220)}`);
+
+    const movedTpl = await api(`/api/templates/${freeTpl}`, { method: "PATCH", body: { channel: "LINKEDIN" } });
+    const movedBack = await api(`/api/templates/${freeTpl}`);
+    movedTpl.status === 200 && movedBack.json?.channel === "LINKEDIN"
+      ? ok("and the same edit on a template nothing references is written — the refusal is about the rows, not the field", `channel=${movedBack.json?.channel}`)
+      : bad("template PATCH with nothing to strand", `HTTP ${movedTpl.status} / read ${JSON.stringify(movedBack.json?.channel)}`);
+
+    // The last of it: a row no door ever wrote. Point one step at LinkedIn copy
+    // with SQL — the way a migration or a direct edit would — and the send has to
+    // notice, because the mail it would produce is the harm this whole round is
+    // about. Nothing was created for this contact but a refusal. This proof needs
+    // a campaign of its own: the test `armFit` started is RUNNING on `camp25Id`,
+    // and an enroll that names a sequence is rewritten to whichever arm the
+    // campaign assigns — measured, and it silently sent the track's own legal
+    // email instead of refusing the mismatched one.
+    const camp25b = await api("/api/campaigns", {
+      method: "POST",
+      body: { name: "Channel fit run: no test attached", goal: "Hold the one row the doors never saw" },
+    });
+    const camp25bId = pickId(camp25b.json, "campaign");
+    await api(`/api/campaigns/${camp25bId}`, { method: "PATCH", body: { status: "ACTIVE" } });
+    camp25bId
+      ? ok("a second campaign, with no A/B test on it, so the enroll sends the track it is given", camp25bId)
+      : bad("channel-fit proof campaign", `HTTP ${camp25b.status}`);
+
+    const seqDirect = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Channel fit: a row no door wrote",
+        channel: "MULTI",
+        campaignId: camp25bId,
+        stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: eTpl, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const seqDirectId = pickId(seqDirect.json, "sequence");
+    const directId = DATABASE_URL && seqDirectId
+      ? await mkContact({
+          email: `fit.${RUN.slice(-6)}@tidewell.dev`,
+          firstName: "Osric",
+          lastName: "Fit",
+          company: "Tidewell Fabric",
+          title: "Owner",
+        })
+      : null;
+
+    if (DATABASE_URL && directId && seqDirectId) {
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "SequenceStep" SET "templateId" = '${liTpl}' WHERE "sequenceId" = '${seqDirectId}' AND "stepNumber" = 1;`], { stdio: "pipe" });
+
+      const directEnr = await api("/api/enrollments", {
+        method: "POST",
+        body: { contactId: directId, sequenceId: seqDirectId, campaignId: camp25bId },
+      });
+      const directEnrId = pickId(directEnr.json, "enrollment");
+      const warn = String(directEnr.json?.warning ?? "");
+      const directSent = directEnr.json?.enrollment?.sequenceId === seqDirectId;
+      directSent && directEnr.status === 201 && directEnrId && warn.includes("step 1 sends EMAIL")
+        && warn.includes('the template "Channel fit: LinkedIn copy" is written for LINKEDIN')
+        ? ok("the row a door never saw is refused AT THE SEND: 201, and the warning names both halves", warn.slice(0, 150))
+        : bad("engine refuses a SQL-mismatched step", `seq=${directEnr.json?.enrollment?.sequenceId} HTTP ${directEnr.status} warning=${warn.slice(0, 90)}`);
+
+      const sentRows = execFileSync("psql", [DATABASE_URL, "-Atc",
+        `SELECT count(*) FROM "SentMessage" WHERE "enrollmentId" = '${directEnrId}';`], { encoding: "utf8" }).trim();
+      const directMails = msgsTo(`fit.${RUN.slice(-6)}@`);
+      sentRows === "0" && directMails.length === 0
+      ? ok("and the prospect got nothing: no message row, nothing in the sink", `SentMessage=${sentRows} sink=${directMails.length}`)
+      : bad("engine guard left a message", `SentMessage=${sentRows} sink=${directMails.length}`);
+
+      const dropEnr = await api(`/api/enrollments/${directEnrId}`, { method: "DELETE" });
+      dropEnr.status === 200
+        ? ok("the proof's enrollment is deleted, so no sweep retries a row the send refuses", directEnrId)
+        : bad("delete the proof enrollment", `HTTP ${dropEnr.status}`);
+
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "SequenceStep" SET "templateId" = '${eTpl}' WHERE "sequenceId" = '${seqDirectId}' AND "stepNumber" = 1;`], { stdio: "pipe" });
+
+      const residue = {};
+      for (const [key, sql] of [
+        ["pairs", 'SELECT count(*) FROM "SequenceStep" s JOIN "Template" t ON t.id = s."templateId" WHERE s.channel <> t.channel;'],
+        ["arms", 'SELECT count(*) FROM "ABTestVariant" v JOIN "Template" t ON t.id = v."templateId" JOIN "SequenceStep" s ON s."sequenceId" = v."sequenceId" WHERE s.channel <> t.channel;'],
+        ["claims", 'SELECT count(*) FROM "SequenceStep" s JOIN "Sequence" q ON q.id = s."sequenceId" WHERE q.channel <> s.channel AND q.channel <> \'MULTI\';'],
+      ]) {
+        residue[key] = execFileSync("psql", [DATABASE_URL, "-Atc", sql], { encoding: "utf8" }).trim();
+      }
+      residue.pairs === "0" && residue.arms === "0" && residue.claims === "0"
+        ? ok("the run leaves no mismatched row at all: restored, and every stored pair, arm and claim agrees", `pairs=${residue.pairs} arms=${residue.arms} claims=${residue.claims}`)
+        : bad("the run left a row the send would refuse", JSON.stringify(residue));
+    } else {
+      console.log("  (DATABASE_URL or the direct sequence missing — the engine-guard proof is skipped, not passed)");
+    }
 
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);

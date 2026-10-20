@@ -8,6 +8,21 @@
 #
 # Safety: refuses a dirty tree, never commits on main (always a fresh
 # `seo/ai-visibility-pack` branch off origin/main), prints the diff.
+#
+# What it writes depends on what the site IS:
+#
+#   · A **static HTML site** gets its index *generated from the site itself*:
+#     `llms.txt`, `robots.txt` and a rebuilt `sitemap.xml`, all from the
+#     reviewed page list in `site-pages.txt`. The generator refuses to run if
+#     the list names a page the repository does not have, and prints the pages
+#     that exist but are not listed. So the index cannot publish a link the
+#     site does not have — which is exactly how the first version of this pack
+#     would have shipped nine dead product links.
+#
+#   · A **Next.js site** gets the static files in `public/`, the OpenAPI
+#     contract, and the robots AI block — but only if the site's own pages
+#     back the pack's index. If the site has no `/products/<slug>/` pages, the
+#     pack refuses to install that index and points at the generator instead.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -42,7 +57,24 @@ git checkout -qB "$BR" origin/main 2>/dev/null || git checkout -qB "$BR"
 if [ -f next.config.ts ] || [ -f next.config.js ] || [ -f next.config.mjs ] || [ -d public ]; then
   # Next.js app: public/ holds static files.
   mkdir -p public
-  cp "$FILES/llms.txt" public/llms.txt
+
+  # The pack's suite index names `/products/<slug>/` pages and a price for each
+  # product. It is only truthful on a site that has them, so it is installed
+  # only when the site does — otherwise it would publish dead links, which is
+  # the failure this pack was rewritten to prevent.
+  HAS_PRODUCTS=0
+  for d in app/products src/app/products pages/products content/products; do
+    [ -d "$d" ] && HAS_PRODUCTS=1
+  done
+  if [ "$HAS_PRODUCTS" = 1 ]; then
+    cp "$FILES/llms.txt" public/llms.txt
+  else
+    echo "NOTE: this site has no /products/<slug>/ pages, so the pack's suite index is NOT"
+    echo "      installed — it would name pages and prices the site does not have."
+    echo "      Write an index for THIS site instead (see site-llms.mjs), or add the"
+    echo "      product pages and re-run."
+  fi
+
   cp "$FILES/openapi.json" public/openapi.json
 
   ROUTE=""
@@ -57,10 +89,10 @@ if [ -f next.config.ts ] || [ -f next.config.js ] || [ -f next.config.mjs ] || [
     cp "$FILES/robots.txt" public/robots.txt
   fi
 else
-  # Static HTML site: files go in the root.
-  cp "$FILES/llms.txt" llms.txt
-  cp "$FILES/openapi.json" openapi.json
-  cp "$FILES/robots.txt" robots.txt
+  # Static HTML site: the index is generated from the site, not assumed.
+  ORIGIN="${SITE_ORIGIN:-https://abetworks.in}"
+  echo "static site — generating the index from the site's own pages ($ORIGIN)"
+  node "$HERE/site-llms.mjs" --site "$TARGET" --origin "$ORIGIN" --manifest "$HERE/site-pages.txt" --write
 fi
 
 # ── Commit ────────────────────────────────────────────────────────────────
@@ -68,15 +100,19 @@ git add -A
 if git diff --cached --quiet; then
   echo "nothing to apply — files already match"; exit 0
 fi
-git commit -q -m "feat(seo): AI-visibility pack — llms.txt, openapi.json, robots AI directives
+git commit -q -m "feat(seo): AI-visibility pack — llms.txt, robots AI directives, sitemap
 
 - llms.txt: the machine-readable index for AI assistants and crawlers —
-  every product with its real pricing, every key page, and pointers to the
-  per-product llms.txt files."
+  generated from the site's own pages, with their own titles, and verified
+  against the repository so it cannot name a page the site does not have.
+- robots.txt: the allow-list plus explicit GPTBot / ClaudeBot /
+  PerplexityBot / Google-Extended allows, pointing at llms.txt.
+- sitemap.xml: rebuilt from the same reviewed page list — the previous one
+  listed 32 URLs that all 404."
 git diff --stat HEAD~1
 echo
 echo "applied on branch '$BR' in $TARGET"
-if [ "$PUSH" = 1 ]; then
+if [ $PUSH = 1 ]; then
   git push -u origin "$BR"
   echo "pushed. Open a PR (never push to main):"
   echo "  gh pr create --base main --head $BR"

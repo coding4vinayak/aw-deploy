@@ -1,0 +1,44 @@
+{
+  "groups": [
+    {
+      "title": "Services",
+      "paths": [
+        "/services/Data_Analytics.html",
+        "/services/ai.html",
+        "/services/digital_services.html",
+        "/services/Bussiness_consultancy.html",
+        "/services/Resources.html",
+        "/services/collaboration.html",
+        "/services/courses.html"
+      ]
+    },
+    {
+      "title": "Company",
+      "paths": [
+        "/services/aboutus.html",
+        "/services/contact.html",
+        "/services/privacy.html",
+        "/services/t&c.html"
+      ]
+    },
+    {
+      "title": "What we publish",
+      "paths": [
+        "/blogs.html",
+        "/services/blog/ai-revolution.html",
+        "/services/blog/productivity-by-decision.html",
+        "/services/data_anyalitics_services/visual_scrapper.html",
+        "/services/data_anyalitics_services/visual_scrap2.html"
+      ]
+    },
+    {
+      "title": "Product pages",
+      "paths": [
+        "/services/products/product_consultacy.html",
+        "/services/products/product_data_anyalitics.html",
+        "/services/products/product_digital.html",
+        "/services/product/abetworks-bots.html"
+      ]
+    }
+  ]
+}

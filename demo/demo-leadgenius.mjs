@@ -131,6 +131,21 @@
 // sibling is NAMED default (the old one cleared by the route in the same
 // breath) the freshly-named sender carries even though the old default has
 // headroom again — the flag decides who is tried first, nothing else.
+// And step [22] gives the **merge-variable declaration** its reader.
+// `Template.variables` was validated for JSON-ness, stored by both write
+// routes, and read by nothing: declaring `["firstNane"]` was a clean 201
+// whose typo surfaced as a blank in a prospect's email. The boundary now
+// reads it back against the text — the honest template takes 201, the typo
+// and the undeclared token are 400s named field-by-field (both directions
+// in one message), a name the renderer could never match like `first-name`
+// is refused at the door, and a body-only edit that orphans a stored
+// declaration is caught by overlaying the row rather than the patch.
+// `variables: []` un-declares and the rules go silent — the back-compat
+// control, because the round's own earlier templates declare nothing and
+// all 244 prior checks still pass. Then a declared template actually SENDS:
+// two contacts with different rows, one template, and each mailbox gets its
+// OWN contact's values with no `{{` left in the bytes — the same
+// MERGEABLE_COLUMNS list the boundary checked is what the renderer fills.
 //
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
@@ -2254,6 +2269,216 @@ async function main() {
         ? ok("the established senders return — next round's sweep re-derives their scores and the try-order simply reads whatever flag is true", `${backUp21.length} active EMAIL accounts`)
         : bad("senders restored after the try-order", backUp21.join(","));
     }
+
+    // --------------------------------------------- [22] merge variables ---
+    console.log("\n[22] The merge-variable declaration is read back against the text — and the text it promises is what the send fills");
+
+    // The declaration used to be a promise with no reader: any JSON went in,
+    // nothing came out of it, and a typo'd name surfaced as a blank in a
+    // prospect's inbox. Both write doors now read it against the text, so the
+    // honest template is the only one that can be stored.
+    const honestSubject = "{{firstName}} - a note for {{company}}";
+    const honestBody = "<p>Hi {{firstName}},</p><p>You run operations at {{company}} as {{title}}, which is exactly who we help. Worth 15 minutes?</p><p>- Sam</p>";
+    const vPost = await api("/api/templates", {
+      method: "POST",
+      body: { name: "Declared intro", channel: "EMAIL", subject: honestSubject, body: honestBody, variables: [" firstName ", "company", "firstName", "title"] },
+    });
+    const declaredId = pickId(vPost.json, "template");
+    declaredId ? ok("an honest declaration is a 201 — the promise the text keeps", declaredId) : bad("declared template created", `HTTP ${vPost.status} ${JSON.stringify(vPost.json).slice(0, 160)}`);
+
+    // The padded and repeated spelling is normalised on the way IN, so the
+    // column holds the one shape the renderer's {{\w+}} can match.
+    const vGet = await api(`/api/templates/${declaredId}`);
+    const storedVars = JSON.stringify(vGet.json?.variables ?? null);
+    storedVars === '["firstName","company","title"]'
+      ? ok("the stored declaration is the normalised one: trimmed, de-duplicated, in order", storedVars)
+      : bad("declaration normalised at the door", storedVars);
+
+    const vRefused = async (label, body, needle) => {
+      const r = await api("/api/templates", { method: "POST", body });
+      const message = `${r.status} ${JSON.stringify(r.json?.fields ?? r.json?.error ?? "")}`;
+      r.status === 400 && String(r.json?.error ?? "").includes(needle)
+        ? ok(label, message.slice(0, 150))
+        : bad(label, message.slice(0, 200));
+      return r;
+    };
+
+    await vRefused("the typo a readerless column used to store is refused by name",
+      { name: "Typo declaration", channel: "EMAIL", subject: honestSubject, body: honestBody, variables: ["firstName", "firstNane", "company", "title"] },
+      "firstNane");
+    await vRefused("a token the declaration never covers is refused too — in the other direction",
+      { name: "Undeclared token", channel: "EMAIL", subject: honestSubject, body: honestBody + "<p>Ask {{nickname}}.</p>", variables: ["firstName", "company", "title"] },
+      "nickname");
+    const bothWays = await vRefused("both halves of the mismatch arrive in ONE message, each named",
+      { name: "Both wrong", channel: "EMAIL", subject: honestSubject, body: honestBody + "<p>Ask {{nickname}}.</p>", variables: ["firstName", "company", "title", "firstNane"] },
+      "firstNane");
+    (String(bothWays.json?.error ?? "").split("; ").length >= 2 && String(bothWays.json?.fields?.variables ?? "").includes("nickname"))
+      ? ok("one round trip teaches the caller both mistakes (4 fields in `variables`, both directions)", "error + fields.variables")
+      : bad("both directions reported at once", JSON.stringify(bothWays.json).slice(0, 200));
+    await vRefused("a name the renderer could never substitute is refused at the door, not stored blank",
+      { name: "Dashed name", channel: "EMAIL", subject: honestSubject, body: honestBody, variables: ["first-name"] },
+      "word characters");
+
+    // The back-compat half of the rule: nothing declared, nothing promised,
+    // both rules silent. Every earlier step's template is this shape — the
+    // 244 checks above it were written before the column had a reader, and
+    // they still pass.
+    const bareTpl = await api("/api/templates", {
+      method: "POST",
+      body: { name: "Undeclared legacy shape", channel: "EMAIL", subject: "{{firstName}} - a note", body: "<p>Hi {{firstName}}, {{whoever}} reads this.</p>" },
+    });
+    const bareId = pickId(bareTpl.json, "template");
+    bareId ? ok("and a template that declares NOTHING is still a 201: no promise, nothing to break", "tokens with no declaration stay legal") : bad("undeclared template", `HTTP ${bareTpl.status}`);
+
+    // PATCH reads the row the update WOULD leave, not just the patch — so
+    // editing one side cannot silently orphan the other.
+    const orphanBody = await api(`/api/templates/${declaredId}`, { method: "PATCH", body: { body: "<p>Hi {{firstName}}, short note.</p>" } });
+    orphanBody.status === 400 && String(orphanBody.json?.error ?? "").includes('"title"')
+      ? ok("a body-only edit that strands a stored declaration is a 400 naming it — the SUBJECT still uses {{title}}, so the merged row is the one judged", String(orphanBody.json?.error).slice(0, 150))
+      : bad("body-only patch orphaned a declaration", `HTTP ${orphanBody.status} ${JSON.stringify(orphanBody.json).slice(0, 160)}`);
+    const claimUnused = await api(`/api/templates/${declaredId}`, { method: "PATCH", body: { variables: ["firstName", "company", "title", "nickname"] } });
+    claimUnused.status === 400 && String(claimUnused.json?.error ?? "").includes("nickname")
+      ? ok("a variables-only edit claiming a token the STORED text never uses is a 400 too", String(claimUnused.json?.error).slice(0, 150))
+      : bad("variables-only patch claimed an unused token", `HTTP ${claimUnused.status} ${JSON.stringify(claimUnused.json).slice(0, 160)}`);
+    const honestPatch = await api(`/api/templates/${declaredId}`, {
+      method: "PATCH",
+      body: { subject: "{{firstName}} - a note", body: "<p>Hi {{firstName}}, quick question - {{title}}?</p>", variables: ["firstName", "title"] },
+    });
+    honestPatch.status === 200
+      ? ok("the patch that keeps both sides honest is the one that lands", `variables ${JSON.stringify(honestPatch.json?.variables)}`)
+      : bad("honest three-key patch", `HTTP ${honestPatch.status} ${JSON.stringify(honestPatch.json).slice(0, 160)}`);
+    const clearedPromise = await api(`/api/templates/${declaredId}`, { method: "PATCH", body: { variables: [] } });
+    const afterClear = await api(`/api/templates/${declaredId}`, { method: "PATCH", body: { body: "<p>Hi {{firstName}}, {{nickname}} reads this.</p>" } });
+    clearedPromise.status === 200 && afterClear.status === 200
+      ? ok("an empty declaration un-promises the row: the column is [] and the rules go silent again", `variables ${JSON.stringify(afterClear.json?.variables)}`)
+      : bad("clearing the declaration", `PATCH [] = ${clearedPromise.status}, then text edit = ${afterClear.status}`);
+
+    // And the promise pays off where it was ever spent: the send. One
+    // declared template, two contacts whose rows differ — each mailbox must
+    // hold that contact's own values and no leftover braces, because the
+    // five names the boundary checked ARE the list `renderTemplate`
+    // iterates.
+    // Put the promise back the way the send needs it: the render below rides
+    // the row whose declaration is the three columns its text actually uses.
+    await api(`/api/templates/${declaredId}`, {
+      method: "PATCH",
+      body: { subject: honestSubject, body: honestBody, variables: ["firstName", "company", "title"] },
+    });
+    const campV = await api("/api/campaigns", { method: "POST", body: { name: "Declared merge run", goal: "Prove the checked vocabulary is the rendered one" } });
+    const campaignVId = pickId(campV.json, "campaign");
+    await api(`/api/campaigns/${campaignVId}`, { method: "PATCH", body: { status: "ACTIVE" } });
+    const seqV = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Declared: one step, due at once",
+        channel: "EMAIL",
+        campaignId: campaignVId,
+        stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: declaredId, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const sequenceVId = pickId(seqV.json, "sequence");
+    campaignVId && sequenceVId ? ok("one due-at-once sequence renders the declared template", sequenceVId) : bad("declared sequence", JSON.stringify(seqV.json).slice(0, 160));
+
+    const idaId = await mkContact({ email: `ida.voss@${RUN.slice(-6)}.dev`, firstName: "Ida", lastName: "Voss", company: "Kestrel Freight", title: "Head of Ops" });
+    const otoId = await mkContact({ email: `oto.mensah@${RUN.slice(-6)}.dev`, firstName: "Oto", lastName: "Mensah", company: "Barium Cold Chain", title: "Director of Fulfillment" });
+    await api("/api/enrollments", { method: "POST", body: { contactId: idaId, sequenceId: sequenceVId, campaignId: campaignVId } });
+    await api("/api/enrollments", { method: "POST", body: { contactId: otoId, sequenceId: sequenceVId, campaignId: campaignVId } });
+    const idaMail = await waitFor(() => {
+      const m = msgsTo("ida.voss@");
+      return m.length >= 1 ? m : null;
+    }, { timeout: 120000, label: "Ida's declared-merge mail in the SMTP sink" });
+    const otoMail = await waitFor(() => {
+      const m = msgsTo("oto.mensah@");
+      return m.length >= 1 ? m : null;
+    }, { timeout: 120000, label: "Oto's declared-merge mail in the SMTP sink" });
+
+    const idaRenders = idaMail[0].subject.includes("Ida") && idaMail[0].subject.includes("Kestrel Freight")
+      && idaMail[0].raw.includes("Head of Ops") && !/[{\[<{]\{/.test(idaMail[0].raw);
+    idaRenders
+      ? ok("the declaration the boundary checked is the vocabulary the SEND filled: Ida's own row, in Ida's mail", `subject "${idaMail[0].subject}"`)
+      : bad("Ida's merge did not render", `${idaMail[0].subject} / ${snippet(idaMail[0].raw)}`);
+    const otoRenders = otoMail[0].subject.includes("Oto") && otoMail[0].subject.includes("Barium Cold Chain")
+      && otoMail[0].raw.includes("Director of Fulfillment") && !otoMail[0].raw.includes("Kestrel Freight");
+    otoRenders
+      ? ok("same template, other contact, other values — one list drives both the check and the fill, per row", `subject "${otoMail[0].subject}"`)
+      : bad("Oto's merge did not render", `${otoMail[0].subject} / ${snippet(otoMail[0].raw)}`);
+
+    // The column, read as storage: what went in through the boundary is the
+    // array itself — no wrapper, no stringified echo.
+    if (DATABASE_URL) {
+      const varsRow = execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c",
+        `SELECT variables::text FROM "Template" WHERE id = '${declaredId}';`], { stdio: "pipe" }).toString().trim();
+      varsRow === '["firstName", "company", "title"]'
+        ? ok("the row the database holds IS the checked vocabulary — a reader finds the array, not a receipt", varsRow)
+        : bad("stored variables shape", varsRow);
+    }
+
+    // The other half of the renderer's vocabulary: a declared name that is NOT
+    // one of the five columns fills from the enrollment's metadata — which no
+    // API door writes today, so the value is seeded the way an importer or a
+    // migration would seed it, and the release is purely the scheduler
+    // noticing the sender came back.
+    const tMet = await api("/api/templates", {
+      method: "POST",
+      body: {
+        name: "Declared + meeting token",
+        channel: "EMAIL",
+        subject: "{{greeting}} - {{firstName}}",
+        body: "<p>Hi {{firstName}}, {{greeting}}.</p>",
+        variables: ["firstName", "greeting"],
+      },
+    });
+    const metTplId = pickId(tMet.json, "template");
+    metTplId ? ok("a two-kind declaration — one column, one metadata name — is exactly what the cross-check admits", "firstName + greeting") : bad("mixed-kind template", `HTTP ${tMet.status}`);
+    const seqMet = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Declared merge: metadata half",
+        channel: "EMAIL",
+        campaignId: campaignVId,
+        stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: metTplId, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const seqMetId = pickId(seqMet.json, "sequence");
+    const solId = await mkContact({ email: `sol.avanty@${RUN.slice(-6)}.dev`, firstName: "Sol", lastName: "Avanty", company: "Avanty Lines", title: "Ops Manager" });
+    const onlyOne = await api("/api/sending-accounts", {
+      method: "POST",
+      body: {
+        name: "Merge proof sender", channel: "EMAIL", provider: "SMTP", dailyLimit: 200,
+        config: { host: "127.0.0.1", port: SINK_PORT, secure: false, user: "demo", pass: "demo", fromName: "Merge proof", fromEmail: `merge-proof@${RUN.slice(-6)}.dev` },
+      },
+    });
+    const mergeAcctId = pickId(onlyOne.json, "sendingAccount");
+    // Every EMAIL sender — the new one included, fresh rows are active — is
+    // parked BEFORE the enroll, so the due-at-once step can only go out after
+    // the seed below and the sender's own return. A mail that left earlier
+    // would be the send answering before the promise existed.
+    const acctList22 = await api("/api/sending-accounts");
+    const others22 = (acctList22.json?.accounts ?? []).filter((a) => a.channel === "EMAIL" && a.isActive);
+    for (const a of others22) await api(`/api/sending-accounts/${a.id}`, { method: "PATCH", body: { isActive: false } });
+    const solEnr = await api("/api/enrollments", { method: "POST", body: { contactId: solId, sequenceId: seqMetId, campaignId: campaignVId } });
+    const solEnrId = solEnr.json?.enrollment?.id;
+    const solWaited = solEnr.json?.warning != null;
+    solWaited && solEnrId && mergeAcctId
+      ? ok("with no sender to try, the enroll answered 201 WITH THE REASON and a recorded wait — nothing sent, the value still seedable", String(solEnr.json.warning).slice(0, 80))
+      : bad("metadata-half enroll sent before its value existed", `HTTP ${solEnr.status} warning=${String(solEnr.json?.warning).slice(0, 80)}`);
+    const seeded = solEnrId && DATABASE_URL && mergeAcctId
+      ? execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c",
+          `UPDATE "Enrollment" SET metadata = jsonb_build_object('greeting', 'Tuesday at ten')::json WHERE id = '${solEnrId}';`], { stdio: "pipe" }).toString().trim()
+      : "";
+    await api(`/api/sending-accounts/${mergeAcctId}`, { method: "PATCH", body: { isActive: true } });
+    const solMail = await waitFor(() => {
+      const m = msgsTo("sol.avanty@");
+      return m.length >= 1 ? m : null;
+    }, { timeout: 120000, label: "the metadata-half mail in the SMTP sink" });
+    const receiptOk = Math.abs(Date.parse(solMail[0].receivedAt) - Date.now()) < 150000;
+    receiptOk
+      ? ok("the send waited for the value: it left only when the seeded row and the returning sender met on a sweep tick", `sink receipt ${solMail[0].receivedAt}`)
+      : bad("metadata-half mail raced the seed", String(solMail[0].receivedAt));
+    solMail[0].subject.includes("Tuesday at ten") && solMail[0].subject.includes("Sol") && !solMail[0].raw.includes("{{")
+      ? ok("the non-column name in the SAME declaration filled from the enrollment it rides: subject, not snippet", `subject "${solMail[0].subject}"`)
+      : bad("metadata token did not render", solMail[0].subject + " / " + snippet(solMail[0].raw));
+    for (const a of others22) await api(`/api/sending-accounts/${a.id}`, { method: "PATCH", body: { isActive: true } });
 
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);

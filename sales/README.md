@@ -21,7 +21,7 @@ one-command demo whose numbers print as they happen:
 | **LeadGenius** — $29/user/mo | "our cold email ends up in spam and we rotate inboxes by hand" | `demo/run-demo.sh leadgenius` — a 3-prospect sequence over real SMTP: a signed **bounce** stops contact one at a single email, a signed **reply** stops contact two, contact three completes — every outbound signature verified |
 | **AbetAgent** — $99/mo | "AI does the work but nobody can verify it" | citations on every answer, step traces of what the agent did, human escalation when a task needs one |
 | **AbetConnect** — $24/agent/mo | "five channels, zero idea who actually matters" | `demo/run-demo.sh connect` — 17 messages ranked 0–100: the 40-seat enquiry **100**, the marketing blast **0** |
-| **AbetAnalytics** — $19/mo | "I don't see revenue problems until the month is closed" | `demo/run-demo.sh analytics` — frozen snapshots, one rule fires and one stays silent, alerts delivered dual-signed, and the frozen number handed to the board as a revocable read-only link (opened keyless **200** → revoke → **404**) |
+| **AbetAnalytics** — $19/mo | "I don't see revenue problems until the month is closed" | `demo/run-demo.sh analytics` — frozen snapshots, one rule fires and one stays silent, alerts delivered dual-signed, the frozen number handed to the board as a revocable read-only link (opened keyless **200** → revoke → **404**), and the weekly report — the same number, frozen with its definition, really emailed (read back in the demo) |
 
 ### Cross-product stories — the strongest 10 minutes
 

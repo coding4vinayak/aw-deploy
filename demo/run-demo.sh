@@ -132,9 +132,18 @@ fi
 
 echo "── demo: $NAME  (app=$APP, port=$PORT, capture=:$HOOK_PORT) ──"
 
+# The weekly-report demo needs the app to be able to *send* mail, so the email
+# it produces is a real HTTP delivery to the same in-process capture server the
+# demo already runs. An app with no mail provider writes messages to its log
+# instead — honest, but it is not a delivery, and a demo must not show one.
+MAIL_ENV=""
+if [ "$NAME" = "analytics" ] || [ "$NAME" = "clinic" ]; then
+  MAIL_ENV="EMAIL_WEBHOOK_URL=http://127.0.0.1:${HOOK_PORT}/email"
+fi
+
 # ABET_ALLOW_PRIVATE_TARGETS=1 lets the app deliver to the local capture server;
 # in production this override is what every app deliberately refuses.
-(cd "$REPOS_DIR/$APP" && ABET_ALLOW_PRIVATE_TARGETS=1 PORT=$PORT nohup npm run start > "$LOG" 2>&1 &)
+(cd "$REPOS_DIR/$APP" && env ABET_ALLOW_PRIVATE_TARGETS=1 PORT="$PORT" $MAIL_ENV nohup npm run start > "$LOG" 2>&1 &)
 
 cleanup() {
   kill_port "$PORT"

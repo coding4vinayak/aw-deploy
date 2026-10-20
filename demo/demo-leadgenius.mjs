@@ -147,6 +147,21 @@
 // OWN contact's values with no `{{` left in the bytes — the same
 // MERGEABLE_COLUMNS list the boundary checked is what the renderer fills.
 //
+// And step [23] opens the other half of that vocabulary: `Enrollment.metadata`,
+// the column `renderTemplate`'s catch-all reads and NO API door wrote. [22]'s
+// own demo had to seed it with psql, which is the honest tell — a sequence
+// could promise `{{meetingDate}}`, enroll accepted the promise, queued the send
+// and mailed "Hi ," to a prospect. Enroll now cashes the promise at the door
+// (shape first: text, a number or a boolean, word-shaped keys) and refuses by
+// step, template and token — against the steps that will actually send, which
+// is why the 400 names step 2 of a two-step sequence. The patch takes the same
+// column and re-checks it, because a patch REPLACES the object; `status`
+// stopped being required so fixing one value cannot re-enqueue the step the
+// ACTIVE branch exists to restart. Proof: the enroll without values is 400, the
+// same enroll with `seats: 0` is 201 and the mail that leaves reads "0 seats" —
+// the `|| ""` that mailed a zero as a blank is gone — and the value a patch
+// wrote is what the later step sends, never the one it replaced.
+//
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
@@ -2423,10 +2438,10 @@ async function main() {
     }
 
     // The other half of the renderer's vocabulary: a declared name that is NOT
-    // one of the five columns fills from the enrollment's metadata — which no
-    // API door writes today, so the value is seeded the way an importer or a
-    // migration would seed it, and the release is purely the scheduler
-    // noticing the sender came back.
+    // one of the five columns fills from the enrollment's metadata. This step
+    // used to seed that column with psql, because no API door wrote it — round
+    // #23 opened the door, so the value now arrives in the enroll body and the
+    // release is purely the scheduler noticing the sender came back.
     const tMet = await api("/api/templates", {
       method: "POST",
       body: {
@@ -2465,16 +2480,16 @@ async function main() {
     const acctList22 = await api("/api/sending-accounts");
     const others22 = (acctList22.json?.accounts ?? []).filter((a) => a.channel === "EMAIL" && a.isActive);
     for (const a of others22) await api(`/api/sending-accounts/${a.id}`, { method: "PATCH", body: { isActive: false } });
-    const solEnr = await api("/api/enrollments", { method: "POST", body: { contactId: solId, sequenceId: seqMetId, campaignId: campaignVId } });
+    const solEnr = await api("/api/enrollments", { method: "POST", body: { contactId: solId, sequenceId: seqMetId, campaignId: campaignVId, metadata: { greeting: "Tuesday at ten" } } });
     const solEnrId = solEnr.json?.enrollment?.id;
     const solWaited = solEnr.json?.warning != null;
     solWaited && solEnrId && mergeAcctId
-      ? ok("with no sender to try, the enroll answered 201 WITH THE REASON and a recorded wait — nothing sent, the value still seedable", String(solEnr.json.warning).slice(0, 80))
+      ? ok("with no sender to try, the enroll answered 201 WITH THE REASON and a recorded wait — nothing sent, the value already on the row", String(solEnr.json.warning).slice(0, 80))
       : bad("metadata-half enroll sent before its value existed", `HTTP ${solEnr.status} warning=${String(solEnr.json?.warning).slice(0, 80)}`);
-    const seeded = solEnrId && DATABASE_URL && mergeAcctId
-      ? execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c",
-          `UPDATE "Enrollment" SET metadata = jsonb_build_object('greeting', 'Tuesday at ten')::json WHERE id = '${solEnrId}';`], { stdio: "pipe" }).toString().trim()
-      : "";
+    const solCarried = solEnr.json?.enrollment?.metadata?.greeting === "Tuesday at ten";
+    solCarried
+      ? ok("the promised value entered through the API door — what [22] needed psql for is now a field the caller sends", JSON.stringify(solEnr.json.enrollment.metadata))
+      : bad("metadata not carried by the enrollment", JSON.stringify(solEnr.json?.enrollment?.metadata ?? null));
     await api(`/api/sending-accounts/${mergeAcctId}`, { method: "PATCH", body: { isActive: true } });
     const solMail = await waitFor(() => {
       const m = msgsTo("sol.avanty@");
@@ -2482,12 +2497,217 @@ async function main() {
     }, { timeout: 120000, label: "the metadata-half mail in the SMTP sink" });
     const receiptOk = Math.abs(Date.parse(solMail[0].receivedAt) - Date.now()) < 150000;
     receiptOk
-      ? ok("the send waited for the value: it left only when the seeded row and the returning sender met on a sweep tick", `sink receipt ${solMail[0].receivedAt}`)
-      : bad("metadata-half mail raced the seed", String(solMail[0].receivedAt));
+      ? ok("the send waited for the SENDER, not for the value: it left on the tick the account came back on", `sink receipt ${solMail[0].receivedAt}`)
+      : bad("metadata-half mail raced the sender", String(solMail[0].receivedAt));
     solMail[0].subject.includes("Tuesday at ten") && solMail[0].subject.includes("Sol") && !mailText(solMail[0]).includes("{{")
       ? ok("the non-column name in the SAME declaration filled from the enrollment it rides: subject, not snippet", `subject "${solMail[0].subject}"`)
       : bad("metadata token did not render", solMail[0].subject + " / " + snippet(solMail[0].raw));
     for (const a of others22) await api(`/api/sending-accounts/${a.id}`, { method: "PATCH", body: { isActive: true } });
+
+    // --------------------------------------------- [23] merge values door ---
+    console.log("\n[23] Enrollment.metadata is a written column — a token the contact row cannot fill must be ANSWERED at the door");
+
+    // Step [22] proved the declaration is read. It also showed the hole in one
+    // line of its own demo: {{greeting}} rendered because psql seeded the
+    // enrollment's metadata, because no API door wrote that column. So a
+    // sequence could promise a merge no caller was allowed to answer, and
+    // enroll accepted it, queued the send, and mailed "Hi ," to a prospect.
+    // The door is open now, and the promise is cashed in it.
+
+    // Step 1 declares columns only; step 2 declares the two names the contact
+    // row cannot fill. An enrollment that satisfies step 1 and not step 2 has
+    // to be refused: the door reads the steps that will actually send, not the
+    // first one the caller is looking at.
+    const mvCol = await api("/api/templates", {
+      method: "POST",
+      body: {
+        name: "Merge door: columns only",
+        channel: "EMAIL",
+        subject: "{{firstName}} - a note for {{company}}",
+        body: "<p>Hi {{firstName}},</p><p>You run {{title}} at {{company}}.</p><p>- Sam</p>",
+        variables: ["firstName", "company", "title"],
+      },
+    });
+    const mvColId = pickId(mvCol.json, "template");
+    mvColId ? ok("a columns-only template is a 201 (step 1)", mvColId) : bad("step 1 template", `HTTP ${mvCol.status}`);
+    const mvTok = await api("/api/templates", {
+      method: "POST",
+      body: {
+        name: "Merge door: two answers",
+        channel: "EMAIL",
+        subject: "{{firstName}} - {{seats}} seats",
+        body: "<p>{{firstName}}, the review is {{reviewAt}} for {{seats}} seats at {{company}}.</p><p>- Sam</p>",
+        variables: ["firstName", "company", "seats", "reviewAt"],
+      },
+    });
+    const mvTokId = pickId(mvTok.json, "template");
+    mvTokId ? ok("a template promising two names the contact row cannot fill is a 201 (step 2)", mvTokId) : bad("step 2 template", `HTTP ${mvTok.status}`);
+
+    const mvCamp = await api("/api/campaigns", { method: "POST", body: { name: "Merge values run", goal: "Prove a promised merge is an answered merge" } });
+    const mvCampId = pickId(mvCamp.json, "campaign");
+    await api(`/api/campaigns/${mvCampId}`, { method: "PATCH", body: { status: "ACTIVE" } });
+    const mvSeq = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Merge door: two steps, both due at once",
+        channel: "EMAIL",
+        campaignId: mvCampId,
+        stepsConfig: [
+          { stepNumber: 1, channel: "EMAIL", templateId: mvColId, delayDays: 0, delayHours: 0 },
+          { stepNumber: 2, channel: "EMAIL", templateId: mvTokId, delayDays: 0, delayHours: 0 },
+        ],
+      },
+    });
+    const mvSeqId = pickId(mvSeq.json, "sequence");
+    mvSeqId ? ok("the two-step sequence is created, and step 2 carries the promise", mvSeqId) : bad("merge door sequence", JSON.stringify(mvSeq.json).slice(0, 160));
+
+    const nilsId = await mkContact({ email: `nils.haugen@${RUN.slice(-6)}.dev`, firstName: "Nils", lastName: "Haugen", company: "Skagen Roasters", title: "Head of Sourcing" });
+    const runaId = await mkContact({ email: `runa.alves@${RUN.slice(-6)}.dev`, firstName: "Runa", lastName: "Alves", company: "Viana Ports", title: "Terminal Director" });
+
+    const noAnswer = await api("/api/enrollments", { method: "POST", body: { contactId: nilsId, sequenceId: mvSeqId, campaignId: mvCampId } });
+    noAnswer.status === 400 && String(noAnswer.json?.error).includes("step 2")
+      ? ok("enrolling without the promised values is refused, and the refusal names the STEP that promises", String(noAnswer.json.error).slice(0, 120))
+      : bad("enroll without metadata refused", `HTTP ${noAnswer.status} ${JSON.stringify(noAnswer.json).slice(0, 160)}`);
+    noAnswer.status === 400 && String(noAnswer.json?.error).includes("{{seats}}") && String(noAnswer.json?.error).includes("{{reviewAt}}")
+      ? ok("both unkept promises arrive in one message, each by its token", String(noAnswer.json.error).slice(0, 120))
+      : bad("both tokens named", JSON.stringify(noAnswer.json).slice(0, 160));
+    noAnswer.json?.enrollment === undefined
+      ? ok("the refusal writes no row — nothing enrolled, nothing queued, no step to send")
+      : bad("refusal leaked an enrollment", JSON.stringify(noAnswer.json).slice(0, 120));
+
+    // The shape rule, at the same door: a value is text, a number or a boolean,
+    // the key is a shape the renderer can match, and neither is unlimited.
+    const mvBad = async (label, metadataValue, needle) => {
+      const tryBad = await api("/api/enrollments", { method: "POST", body: { contactId: nilsId, sequenceId: mvSeqId, campaignId: mvCampId, metadata: metadataValue } });
+      const msg = String(tryBad.json?.error ?? JSON.stringify(tryBad.json));
+      tryBad.status === 400 && msg.includes(needle)
+        ? ok(`${label} answers 400 naming ${needle.slice(0, 40)}`, msg.slice(0, 140))
+        : bad(label, `HTTP ${tryBad.status} ${msg.slice(0, 160)}`);
+      return { status: tryBad.status, msg };
+    };
+    await mvBad("a metadata ARRAY", ["seats"], "array");
+    await mvBad("a key the renderer could never match", { "meeting-date": "Tuesday", seats: 2, reviewAt: "Tuesday" }, "word characters");
+    await mvBad("a nested object as a merge value", { seats: { n: 2 }, reviewAt: "Tuesday" }, "text, a number or true/false");
+    await mvBad("a value longer than a phrase of copy", { seats: "x".repeat(501), reviewAt: "Tuesday" }, "at most 500");
+    const partial = await mvBad("one value sent while the other stays promised", { seats: 2 }, "{{reviewAt}}");
+    !partial.msg.includes("{{seats}}")
+      ? ok("the refusal is per name: the value that arrived is not also demanded")
+      : bad("refusal demanded an answered token", partial.msg.slice(0, 160));
+
+    const answered = await api("/api/enrollments", {
+      method: "POST",
+      body: { contactId: nilsId, sequenceId: mvSeqId, campaignId: mvCampId, metadata: { seats: 0, reviewAt: "Thursday 10:00" } },
+    });
+    const nilsEnrId = answered.json?.enrollment?.id;
+    answered.status === 201 && nilsEnrId
+      ? ok("the same enroll, values carried, is a 201 — the promise is cashed rather than argued", nilsEnrId)
+      : bad("enroll with metadata", `HTTP ${answered.status} ${JSON.stringify(answered.json).slice(0, 160)}`);
+    const nilsMeta = answered.json?.enrollment?.metadata ?? {};
+    nilsMeta.seats === 0 && nilsMeta.reviewAt === "Thursday 10:00" && Object.keys(nilsMeta).length === 2
+      ? ok("the enrollment the API answers carries the metadata as sent: no wrapper, no stringified echo", JSON.stringify(nilsMeta))
+      : bad("metadata round trip", JSON.stringify(answered.json?.enrollment?.metadata ?? null));
+
+    // The back-compat control: a sequence that promises nothing still enrolls
+    // without a value, and the column stays NULL rather than an empty object.
+    const legacySeq = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Merge door: legacy silence",
+        channel: "EMAIL",
+        campaignId: mvCampId,
+        stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: bareId, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const legacySeqId = pickId(legacySeq.json, "sequence");
+    const katoId = await mkContact({ email: `kato.brandt@${RUN.slice(-6)}.dev`, firstName: "Kato", lastName: "Brandt", company: "Halden Freight", title: "Dispatch Lead" });
+    const silentEnroll = await api("/api/enrollments", { method: "POST", body: { contactId: katoId, sequenceId: legacySeqId, campaignId: mvCampId } });
+    silentEnroll.status === 201 && (silentEnroll.json?.enrollment?.metadata ?? null) === null
+      ? ok("nothing promised, nothing demanded: the undeclared sequence still enrolls clean and stores no empty object", pickId(silentEnroll.json, "enrollment") ?? "")
+      : bad("undeclared enroll control", `HTTP ${silentEnroll.status} metadata=${JSON.stringify(silentEnroll.json?.enrollment?.metadata ?? null)}`);
+
+    let nilsMails = [];
+    for (let waited = 0; waited < 210 && nilsMails.length < 2; waited += 5) {
+      await sleep(5000);
+      nilsMails = msgsTo("nils.haugen@");
+    }
+    nilsMails.length >= 2
+      ? ok("both steps sent against the ONE enrollment's metadata", `${nilsMails.length} mails in the sink`)
+      : bad("two steps sent", `${nilsMails.length} mail(s) to nils`);
+    const seatsMail = nilsMails.find((m) => m.subject.includes("seats"));
+    seatsMail?.subject.includes("Nils - 0 seats")
+      ? ok("the merge value 0 renders as 0 in a prospect's subject line, where a falsy blank mailed nothing", `"${seatsMail?.subject}"`)
+      : bad("0 rendered as itself", seatsMail ? `"${seatsMail.subject}"` : "no seats mail arrived");
+    const seatsBody = seatsMail ? mailText(seatsMail) : "";
+    seatsBody.includes("Thursday 10:00") && seatsBody.includes("Skagen Roasters") && !seatsBody.includes("{{")
+      ? ok("step 2 merges the metadata AND the contact row in one sentence, with no brace left in the bytes", snippet(seatsMail.raw).slice(0, 90))
+      : bad("step 2 body merged", seatsBody.slice(0, 160));
+    const noteMail = nilsMails.find((m) => m.subject.includes("a note for"));
+    noteMail && mailText(noteMail).includes("Head of Sourcing") && !mailText(noteMail).includes("{{")
+      ? ok("the step that promised only columns needed no answer at the door and still merged from the contact row", `"${noteMail.subject}"`)
+      : bad("columns-only step merged", noteMail ? snippet(noteMail.raw).slice(0, 160) : "no note mail arrived");
+
+    if (DATABASE_URL && nilsEnrId) {
+      const storedMeta = JSON.parse(execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c",
+        `SELECT metadata::text FROM "Enrollment" WHERE id = '${nilsEnrId}';`], { stdio: "pipe" }).toString().trim());
+      storedMeta.seats === 0 && storedMeta.reviewAt === "Thursday 10:00"
+        ? ok("the DATABASE holds the object the door accepted — a written column, not a receipt", JSON.stringify(storedMeta))
+        : bad("metadata stored", JSON.stringify(storedMeta));
+    }
+
+    // The patch door. Enrolled while every sender is parked, so the mail that
+    // leaves carries whatever the patch wrote and nothing else: the patch
+    // REPLACES the object, so dropping a promised value is refused exactly like
+    // never sending it, and a fix that arrives before the send is the fix the
+    // prospect reads.
+    const acctList23 = await api("/api/sending-accounts");
+    const others23 = (acctList23.json?.accounts ?? []).filter((a) => a.channel === "EMAIL" && a.isActive);
+    for (const a of others23) await api(`/api/sending-accounts/${a.id}`, { method: "PATCH", body: { isActive: false } });
+    const runaEnr = await api("/api/enrollments", { method: "POST", body: { contactId: runaId, sequenceId: mvSeqId, campaignId: mvCampId, metadata: { seats: 3, reviewAt: "Monday" } } });
+    const runaEnrId = runaEnr.json?.enrollment?.id;
+    runaEnr.status === 201 && runaEnr.json?.warning != null && runaEnrId
+      ? ok("values sent, senders parked: 201 with the reason in the warning and nothing mailed yet", String(runaEnr.json.warning).slice(0, 60))
+      : bad("parked enroll", `HTTP ${runaEnr.status} warning=${String(runaEnr.json?.warning)}`);
+
+    const patchBad = async (label, metadataValue, needle) => {
+      const tryPatch = await api(`/api/enrollments/${runaEnrId}`, { method: "PATCH", body: { metadata: metadataValue } });
+      const msg = String(tryPatch.json?.error ?? JSON.stringify(tryPatch.json));
+      tryPatch.status === 400 && msg.includes(needle)
+        ? ok(`${label} answers 400 naming ${needle.slice(0, 40)}`, msg.slice(0, 140))
+        : bad(label, `HTTP ${tryPatch.status} ${msg.slice(0, 160)}`);
+    };
+    await patchBad("a patch that drops a value the sequence still promises", { seats: 4 }, "{{reviewAt}}");
+    await patchBad("a patch that sends an object as a value", { seats: {}, reviewAt: "Tuesday" }, "text, a number or true/false");
+
+    const patched = await api(`/api/enrollments/${runaEnrId}`, { method: "PATCH", body: { metadata: { seats: 7, reviewAt: "Tuesday 9:30" } } });
+    patched.status === 200 && patched.json?.metadata?.seats === 7 && patched.json?.metadata?.reviewAt === "Tuesday 9:30"
+      ? ok("a METADATA-ONLY patch is a 200: status stopped being required, so a value fix cannot restart the step", JSON.stringify(patched.json?.metadata))
+      : bad("metadata-only PATCH", `HTTP ${patched.status} ${JSON.stringify(patched.json).slice(0, 160)}`);
+    patched.json?.status === "ACTIVE" && patched.json?.currentStep === 0
+      ? ok("and it stayed out of the engine's columns: still ACTIVE, still at step 0", `status=${patched.json?.status} currentStep=${patched.json?.currentStep}`)
+      : bad("patch touched engine fields", `status=${patched.json?.status} currentStep=${patched.json?.currentStep}`);
+    const emptyPatch = await api(`/api/enrollments/${runaEnrId}`, { method: "PATCH", body: {} });
+    emptyPatch.status === 400
+      ? ok("an empty PATCH is still the 400 it was", String(emptyPatch.json?.error).slice(0, 60))
+      : bad("empty patch refused", `HTTP ${emptyPatch.status}`);
+
+    for (const a of others23) await api(`/api/sending-accounts/${a.id}`, { method: "PATCH", body: { isActive: true } });
+    let runaMails = [];
+    for (let waited = 0; waited < 210 && runaMails.length < 2; waited += 5) {
+      await sleep(5000);
+      runaMails = msgsTo("runa.alves@");
+    }
+    const runaSeats = runaMails.find((m) => m.subject.includes("seats"));
+    runaMails.length >= 2 && runaSeats?.subject.includes("7 seats")
+      ? ok("the send read the PATCHED value: step 2 left with 7 seats, never the 3 it was enrolled with", `"${runaSeats?.subject}"`)
+      : bad("patched value reached the send", runaSeats ? `"${runaSeats.subject}"` : `${runaMails.length} mail(s)`);
+    !runaMails.some((m) => m.subject.includes("3 seats") || mailText(m).includes("Monday"))
+      ? ok("no mail carried the superseded answer: the object was replaced, not merged into", `${runaMails.length} mails checked`)
+      : bad("superseded value still sent", runaMails.map((m) => m.subject).join(" / ").slice(0, 160));
+    const backUp23 = await api("/api/sending-accounts");
+    const seen23 = new Map((backUp23.json?.accounts ?? []).map((a) => [a.id, a.isActive]));
+    others23.every((a) => seen23.get(a.id))
+      ? ok("every EMAIL sender this step parked is back up", `${others23.length} accounts restored`)
+      : bad("senders restored after the merge-values run", String(others23.filter((a) => !seen23.get(a.id)).map((a) => a.name)));
 
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);

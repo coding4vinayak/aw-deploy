@@ -196,6 +196,22 @@
 // both channels, the database holds no message for it and the sink receives none,
 // and the same step is legal again before the run ends.
 //
+// Step [26] asks the other half of the sentence [25] spoke. `subject String?` is
+// commented `// For email` in the schema and nothing read that as a rule: the
+// column has ONE reader — the engine renders a subject only for an EMAIL step and
+// email.ts sends `msg.subject || "New message"` — while linkedin.ts posts a
+// literal provider subject of its own and whatsapp.ts does not take the argument.
+// So an EMAIL template with the subject left out was a legal 201 whose mail lands
+// titled "New message" (the harm [25] named, reachable through a path that breaks
+// no channel rule at all), and a subject on a chat template is copy that is
+// stored, returned by every read and delivered to nobody. Proof: each shape is
+// refused at the door by what a prospect would have read; a patch naming only the
+// channel is judged on the row it LEAVES and the pair that says the same thing
+// writes; an unrelated edit on the same row is not taxed; and the send refuses the
+// row no door saw — proven by blanking a live template's subject with SQL, where
+// enroll answers 201 with a warning naming the step, the template and the
+// fallback, and neither the database nor the mailbox holds a message for it.
+//
 // Env: API_KEY (required) · INBOUND_SECRET (required — the app's
 // INBOUND_WEBHOOK_SIGNING_SECRET) · APP_BASE (default http://localhost:3200) ·
 // HOOK_PORT (default 3799) · SINK_PORT (default 2525) ·
@@ -3176,11 +3192,26 @@ async function main() {
       ? ok("a template's channel change is refused by the steps and arms it would strand, named", whyStrand.slice(0, 150))
       : bad("template PATCH that would strand live steps", `HTTP ${strandTpl.status} ${JSON.stringify(strandTpl.json).slice(0, 220)}`);
 
-    const movedTpl = await api(`/api/templates/${freeTpl}`, { method: "PATCH", body: { channel: "LINKEDIN" } });
+    // The same edit judged on the row it leaves (#26): this template carries a
+    // subject, and a LINKEDIN row's subject is a line no carrier reads — so the
+    // channel move alone is refused even with NOTHING to strand, and the patch
+    // that clears the subject in the same call is the one that writes. The
+    // refusal is the cheaper half of the proof it used to be: a strand answer
+    // would have named rows, this one names the row.
+    const movedAlone = await api(`/api/templates/${freeTpl}`, { method: "PATCH", body: { channel: "LINKEDIN" } });
+    const whyMoved = String(movedAlone.json?.error ?? "");
+    movedAlone.status === 400 && whyMoved.includes('the template "Channel fit: unattached email copy" is written for LINKEDIN and carries a subject')
+      ? ok("a channel move that would leave dead copy behind is refused by the row itself", whyMoved.slice(0, 150))
+      : bad("template PATCH to a carrier with no subject column", `HTTP ${movedAlone.status} ${JSON.stringify(movedAlone.json).slice(0, 220)}`);
+
+    const movedTpl = await api(`/api/templates/${freeTpl}`, {
+      method: "PATCH",
+      body: { channel: "LINKEDIN", subject: "" },
+    });
     const movedBack = await api(`/api/templates/${freeTpl}`);
-    movedTpl.status === 200 && movedBack.json?.channel === "LINKEDIN"
-      ? ok("and the same edit on a template nothing references is written — the refusal is about the rows, not the field", `channel=${movedBack.json?.channel}`)
-      : bad("template PATCH with nothing to strand", `HTTP ${movedTpl.status} / read ${JSON.stringify(movedBack.json?.channel)}`);
+    movedTpl.status === 200 && movedBack.json?.channel === "LINKEDIN" && !movedBack.json?.subject
+      ? ok("and the pair that says the same thing writes — channel moved, subject cleared in the one call", `channel=${movedBack.json?.channel} subject=${JSON.stringify(movedBack.json?.subject)}`)
+      : bad("template PATCH moving channel and clearing the subject", `HTTP ${movedTpl.status} / read ${JSON.stringify(movedBack.json).slice(0, 220)}`);
 
     // The last of it: a row no door ever wrote. Point one step at LinkedIn copy
     // with SQL — the way a migration or a direct edit would — and the send has to
@@ -3264,6 +3295,187 @@ async function main() {
         : bad("the run left a row the send would refuse", JSON.stringify(residue));
     } else {
       console.log("  (DATABASE_URL or the direct sequence missing — the engine-guard proof is skipped, not passed)");
+    }
+
+    // -------------------- [26] what the subject column means --------------------
+    console.log("\n[26] An email template must carry the line its sender would otherwise invent");
+
+    const camp26 = await api("/api/campaigns", {
+      method: "POST",
+      body: { name: "Subject fit run", goal: "Hold the copy whose subject column decides what it is for" },
+    });
+    const camp26Id = pickId(camp26.json, "campaign");
+    await api(`/api/campaigns/${camp26Id}`, { method: "PATCH", body: { status: "ACTIVE" } });
+    camp26Id
+      ? ok("campaign for the subject-fit run created and ACTIVE", camp26Id)
+      : bad("subject-fit campaign", `HTTP ${camp26.status}`);
+
+    // The three spellings of "no subject line" at the create door. Each is a
+    // legal 201 today and a mail titled "New message" tomorrow, and none of them
+    // breaks a channel rule — which is why #25 left this half unpoliced.
+    const noLine = [
+      ["absent", { name: "Subject fit: an email with no line", channel: "EMAIL", body: "<p>Hi {{firstName}}, a word about {{company}}?</p>" }],
+      ["null", { name: "Subject fit: an email with a null line", channel: "EMAIL", subject: null, body: "<p>Hi {{firstName}}, a word about {{company}}?</p>" }],
+      ["whitespace", { name: "Subject fit: an email with a blank line", channel: "EMAIL", subject: "   ", body: "<p>Hi {{firstName}}, a word about {{company}}?</p>" }],
+    ];
+    for (const [shape, body] of noLine) {
+      const r = await api("/api/templates", { method: "POST", body });
+      const why = String(r.json?.error ?? "");
+      r.status === 400 && why.includes("is an EMAIL template that carries no subject") && why.includes('"New message"')
+        ? ok(`an email template whose subject is ${shape} is refused by the fallback it would mail`, why.slice(0, 150))
+        : bad(`email template with subject ${shape}`, `HTTP ${r.status} ${JSON.stringify(r.json).slice(0, 220)}`);
+    }
+    if (DATABASE_URL) {
+      const strays = execFileSync("psql", [DATABASE_URL, "-Atc",
+        `SELECT count(*) FROM "Template" WHERE "name" LIKE 'Subject fit: an email with %';`], { encoding: "utf8" }).trim();
+      strays === "0"
+        ? ok("and none of the three wrote a row — the door refused before Prisma saw the body", `Template rows=${strays}`)
+        : bad("a refused email template still wrote a row", `Template rows=${strays}`);
+    } else {
+      console.log("  (DATABASE_URL missing — the wrote-nothing check is skipped, not passed)");
+    }
+
+    // The other half of the same column: a subject a carrier cannot deliver.
+    const deadLine = [
+      ["LINKEDIN", { name: "Subject fit: a note with a subject", channel: "LINKEDIN", subject: "Written, stored, never sent", body: "Hi {{firstName}}, quick thought for {{company}}." }],
+      ["WHATSAPP", { name: "Subject fit: a chat with a subject", channel: "WHATSAPP", subject: "Written, stored, never sent", body: "Hi {{firstName}}, still shipping to {{company}}?" }],
+    ];
+    for (const [channel, body] of deadLine) {
+      const r = await api("/api/templates", { method: "POST", body });
+      const why = String(r.json?.error ?? "");
+      r.status === 400 && why.includes(`is written for ${channel} and carries a subject`) && why.includes("delivered to nobody")
+        ? ok(`a ${channel} template carrying a subject is refused as the copy no carrier reads`, why.slice(0, 150))
+        : bad(`${channel} template with a subject`, `HTTP ${r.status} ${JSON.stringify(r.json).slice(0, 220)}`);
+    }
+
+    const sTplRes = await api("/api/templates", {
+      method: "POST",
+      body: {
+        name: "Subject fit: an email that carries its line",
+        channel: "EMAIL",
+        subject: "{{firstName}} - a line a prospect will read",
+        body: "<p>Hi {{firstName}}, a word about {{company}}?</p>",
+      },
+    });
+    const sLinkRes = await api("/api/templates", {
+      method: "POST",
+      body: { name: "Subject fit: a note without one", channel: "LINKEDIN", body: "Hi {{firstName}}, quick thought for {{company}}." },
+    });
+    const sTpl = pickId(sTplRes.json, "template");
+    const sLinkTpl = pickId(sLinkRes.json, "template");
+    sTpl && sLinkTpl
+      ? ok("the two honest rows are 201s: an email with its line, a note asking for none it cannot carry", "EMAIL / LINKEDIN")
+      : bad("subject-fit templates", `HTTP ${sTplRes.status}/${sLinkRes.status}`);
+
+    // The patch door, judged on the row the update WOULD leave.
+    const clearLine = await api(`/api/templates/${sTpl}`, { method: "PATCH", body: { subject: "" } });
+    const whyClear = String(clearLine.json?.error ?? "");
+    clearLine.status === 400 && whyClear.includes("carries no subject") && whyClear.includes('"New message"')
+      ? ok("clearing the subject of a live email template is refused by the fallback it would mail", whyClear.slice(0, 150))
+      : bad("PATCH clearing an email template's subject", `HTTP ${clearLine.status} ${JSON.stringify(clearLine.json).slice(0, 220)}`);
+
+    const editBody = await api(`/api/templates/${sTpl}`, {
+      method: "PATCH",
+      body: { body: "<p>Hi {{firstName}}, a word about {{company}} and its handoff time?</p>" },
+    });
+    editBody.status === 200 && editBody.json?.subject === "{{firstName}} - a line a prospect will read"
+      ? ok("and a patch that names neither half is not asked to re-write a subject it never touched", "body only")
+      : bad("PATCH of the body alone", `HTTP ${editBody.status} ${JSON.stringify(editBody.json?.subject)}`);
+
+    const sameChannel = await api(`/api/templates/${sTpl}`, { method: "PATCH", body: { channel: "EMAIL" } });
+    sameChannel.status === 200 && sameChannel.json?.channel === "EMAIL"
+      ? ok("naming the channel a row already carries is a 200 — the verdict is about the state, not the key", `channel=${sameChannel.json?.channel}`)
+      : bad("PATCH restating the channel", `HTTP ${sameChannel.status} ${JSON.stringify(sameChannel.json).slice(0, 220)}`);
+
+    const moveEmail = await api(`/api/templates/${sLinkTpl}`, { method: "PATCH", body: { channel: "EMAIL" } });
+    const whyMove = String(moveEmail.json?.error ?? "");
+    moveEmail.status === 400 && whyMove.includes("is an EMAIL template that carries no subject")
+      ? ok("overlaying only the channel is judged on the row it leaves: EMAIL with the stored nothing", whyMove.slice(0, 150))
+      : bad("PATCH moving a note onto the email carrier", `HTTP ${moveEmail.status} ${JSON.stringify(moveEmail.json).slice(0, 220)}`);
+
+    const moveBoth = await api(`/api/templates/${sLinkTpl}`, {
+      method: "PATCH",
+      body: { channel: "EMAIL", subject: "{{firstName}} - the same thought, mailed" },
+    });
+    const movedRead = await api(`/api/templates/${sLinkTpl}`);
+    moveBoth.status === 200 && movedRead.json?.channel === "EMAIL" && movedRead.json?.subject === "{{firstName}} - the same thought, mailed"
+      ? ok("and the call that answers its own question writes both halves at once", `channel=${movedRead.json?.channel}`)
+      : bad("PATCH moving channel and supplying the line", `HTTP ${moveBoth.status} / read ${JSON.stringify(movedRead.json).slice(0, 220)}`);
+    const moveBack = await api(`/api/templates/${sLinkTpl}`, {
+      method: "PATCH",
+      body: { channel: "LINKEDIN", subject: "" },
+    });
+    moveBack.status === 200
+      ? ok("and back the other way, clearing the line the new carrier cannot deliver", `channel=${moveBack.json?.channel}`)
+      : bad("PATCH moving back to LINKEDIN", `HTTP ${moveBack.status} ${JSON.stringify(moveBack.json).slice(0, 220)}`);
+
+    // The row no door wrote: a live email template whose subject is blanked by
+    // SQL. The send is where a prospect would meet it, so the send is where it
+    // is refused — enroll answers 201 with the warning, and holds no message.
+    const seq26 = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Subject fit: an email track that carries its line",
+        channel: "EMAIL",
+        campaignId: camp26Id,
+        stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: sTpl, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const seq26Id = pickId(seq26.json, "sequence");
+    const subjId = DATABASE_URL && seq26Id
+      ? await mkContact({
+          email: `subject.${RUN.slice(-6)}@tidewell.dev`,
+          firstName: "Ingrid",
+          lastName: "Line",
+          company: "Tidewell Fabric",
+          title: "Owner",
+        })
+      : null;
+
+    if (DATABASE_URL && subjId && seq26Id) {
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "Template" SET "subject" = '' WHERE "id" = '${sTpl}';`], { stdio: "pipe" });
+
+      const subjEnr = await api("/api/enrollments", {
+        method: "POST",
+        body: { contactId: subjId, sequenceId: seq26Id, campaignId: camp26Id },
+      });
+      const subjEnrId = pickId(subjEnr.json, "enrollment");
+      const subjWarn = String(subjEnr.json?.warning ?? "");
+      subjEnr.json?.enrollment?.sequenceId === seq26Id && subjEnr.status === 201 && subjEnrId
+        && subjWarn.includes("step 1 sends EMAIL from the template \"Subject fit: an email that carries its line\"")
+        && subjWarn.includes("carries no subject") && subjWarn.includes('"New message"')
+        ? ok("the row a door never saw is refused AT THE SEND: 201, and the warning names the step, the row and the fallback", subjWarn.slice(0, 150))
+        : bad("engine refuses a subjectless email template", `seq=${subjEnr.json?.enrollment?.sequenceId} HTTP ${subjEnr.status} warning=${subjWarn.slice(0, 90)}`);
+
+      const subjRows = execFileSync("psql", [DATABASE_URL, "-Atc",
+        `SELECT count(*) FROM "SentMessage" WHERE "enrollmentId" = '${subjEnrId}';`], { encoding: "utf8" }).trim();
+      const subjMails = msgsTo(`subject.${RUN.slice(-6)}@`);
+      subjRows === "0" && subjMails.length === 0
+        ? ok("and the prospect got nothing: no message row, nothing in the sink", `SentMessage=${subjRows} sink=${subjMails.length}`)
+        : bad("the subject guard left a message", `SentMessage=${subjRows} sink=${subjMails.length}`);
+
+      const dropSubj = await api(`/api/enrollments/${subjEnrId}`, { method: "DELETE" });
+      dropSubj.status === 200
+        ? ok("the proof's enrollment is deleted, so no sweep retries a row the send refuses", subjEnrId)
+        : bad("delete the subject proof enrollment", `HTTP ${dropSubj.status}`);
+
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "Template" SET "subject" = '{{firstName}} - a line a prospect will read' WHERE "id" = '${sTpl}';`], { stdio: "pipe" });
+
+      const residue26 = {};
+      for (const [key, sql] of [
+        ["mailless", 'SELECT count(*) FROM "Template" WHERE "channel" = \'EMAIL\' AND ("subject" IS NULL OR "subject" = \'\');'],
+        ["unread", 'SELECT count(*) FROM "Template" WHERE "channel" <> \'EMAIL\' AND "subject" IS NOT NULL AND "subject" <> \'\';'],
+        ["steps", 'SELECT count(*) FROM "SequenceStep" s JOIN "Template" t ON t.id = s."templateId" WHERE s.channel = \'EMAIL\' AND (t."subject" IS NULL OR t."subject" = \'\');'],
+      ]) {
+        residue26[key] = execFileSync("psql", [DATABASE_URL, "-Atc", sql], { encoding: "utf8" }).trim();
+      }
+      residue26.mailless === "0" && residue26.unread === "0" && residue26.steps === "0"
+        ? ok("the run leaves no row the rule would refuse: every email template carries a line, no chat one pretends to", JSON.stringify(residue26))
+        : bad("the run left a subject row the doors refuse", JSON.stringify(residue26));
+    } else {
+      console.log("  (DATABASE_URL, the contact or the track missing — the engine-subject proof is skipped, not passed)");
     }
 
     // ------------------------------------------------------------ summary --

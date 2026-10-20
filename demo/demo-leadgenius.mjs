@@ -3176,7 +3176,15 @@ async function main() {
       ? ok("a template's channel change is refused by the steps and arms it would strand, named", whyStrand.slice(0, 150))
       : bad("template PATCH that would strand live steps", `HTTP ${strandTpl.status} ${JSON.stringify(strandTpl.json).slice(0, 220)}`);
 
-    const movedTpl = await api(`/api/templates/${freeTpl}`, { method: "PATCH", body: { channel: "LINKEDIN" } });
+    // Step [26]'s rule applies here too, and it answers this step's own
+    // question: moving an email template to a chat channel has to take the
+    // subject with it, because a chat send never reads that column. The one
+    // call that says BOTH halves is the legal one — and it still proves what
+    // [25] wanted to prove: the refusal is about the *rows* that would be
+    // stranded, not about the field. (This check used to patch the channel
+    // alone, which [26]'s rule then refused — a stale expectation, not a
+    // product defect.)
+    const movedTpl = await api(`/api/templates/${freeTpl}`, { method: "PATCH", body: { channel: "LINKEDIN", subject: null } });
     const movedBack = await api(`/api/templates/${freeTpl}`);
     movedTpl.status === 200 && movedBack.json?.channel === "LINKEDIN"
       ? ok("and the same edit on a template nothing references is written — the refusal is about the rows, not the field", `channel=${movedBack.json?.channel}`)

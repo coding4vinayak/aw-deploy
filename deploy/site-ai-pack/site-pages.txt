@@ -1,0 +1,63 @@
+# The pages this site actually has.
+#
+# One entry per line: `path | human label`. The label is the link text in the
+# index; the page's own <title> becomes the description when it says something
+# the label does not.
+#
+# This list is the judgement call, and it is deliberately explicit: a page that
+# is not listed here is not published in the index or the sitemap, so every
+# omission is a decision somebody can see and change. The generator refuses to
+# run if a listed path is not in the repository, and prints the pages that
+# exist but are not listed.
+#
+# The site is a static services site. There are no product pages and no prices
+# on it — the Abetworks product suite is sold from its own hosts, which the
+# site's own sitemap links to, and the index lists those hosts as links
+# without claiming anything about them that the site does not say.
+
+# ── the site itself ───────────────────────────────────────────────────────
+/ | Abet Works
+
+# ── the services the home page sells ──────────────────────────────────────
+/services/Data_Analytics.html | Data Analytics
+/services/ai.html | Artificial Intelligence
+/services/digital_services.html | Digital Services
+/services/Bussiness_consultancy.html | Business Consultancy
+/services/Resources.html | Resources
+/services/collaboration.html | Collaboration
+/services/courses.html | Curated Courses
+
+# ── the company ───────────────────────────────────────────────────────────
+/services/aboutus.html | About us
+/services/contact.html | Contact
+/services/privacy.html | Privacy policy
+/services/t&c.html | Terms and conditions
+
+# ── what the site publishes ───────────────────────────────────────────────
+/blogs.html | Blog
+/services/blog/ai-revolution.html | How AI is revolutionizing business processes
+/services/blog/productivity-by-decision.html | Productivity by decision
+/services/data_anyalitics_services/visual_scrapper.html | Data visual scraper
+/services/data_anyalitics_services/visual_scrap2.html | Visual scraper
+
+# ── the product pages under the services ──────────────────────────────────
+/services/products/product_consultacy.html | Product: consultancy
+/services/products/product_data_anyalitics.html | Product: data analytics
+/services/products/product_digital.html | Product: digital services
+/services/product/abetworks-bots.html | Abetworks bots
+#
+# Deliberately not listed (each one is a reason, not an oversight):
+#   /starter-page.html                 — a Bootstrap template, not a page
+#   /service-details.html               — a Bootstrap template, not a page
+#   /services/data_anyalitics_services/test.html
+#                                      — a test page
+#   /services/blog/blog1.html           — a placeholder post
+#   /services/blog/ai-revolutions.html  — a duplicate of the blog index
+#   /services/blog/blogs.html           — a duplicate of /blogs.html
+#   /services/product/template-best.html— a template
+#   /services/products/product_sales_and_marketing .html
+#                                      — the filename carries a space; the URL would
+#                                        need encoding and the page is a duplicate
+#   /services/privacy-policy-detail.html— a duplicate of the privacy policy
+#   /services/term-of-privacy.html      — no title; a duplicate of the privacy policy
+#   dump/*                              — a working copy, not published

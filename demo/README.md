@@ -5,7 +5,7 @@ this machine: production boot, real Postgres + Redis, real queue workers, real
 signed webhook deliveries — verified in-process, not staged.
 
 ```bash
-demo/run-demo.sh leadworks   # lead intake → duplicate blocked → signed webhooks → CSV export
+demo/run-demo.sh leadworks   # lead intake → duplicate blocked → signed webhooks → CSV export → the buyer's CSV → a rule that reaches who it names
 demo/run-demo.sh analytics   # e-commerce revenue watchdog: frozen snapshots + an alert that fires
 demo/run-demo.sh flow        # portal lead → workflow run → templated alert + signed completion
 demo/run-demo.sh connect     # ranked omnichannel inbox (re-seeds the demo workspace)
@@ -20,7 +20,7 @@ demo/run-demo.sh agent       # the agent that cites, or escalates — signed run
 
 | Demo | The story | The proof it prints |
 |---|---|---|
-| `leadworks` | A real-estate desk drops today's prospect list | duplicate refused **409** at the door; per-lead `lead.created` + `export.completed` deliveries with **signature VERIFIED**; CSV export row count; VALIDATE trail (`PASS`/`FLAG` per check); DEDUPE sweep clean |
+| `leadworks` | A real-estate desk drops today's prospect list | duplicate refused **409** at the door; per-lead `lead.created` + `export.completed` deliveries with **signature VERIFIED**; CSV export row count; VALIDATE trail (`PASS`/`FLAG` per check); DEDUPE sweep clean; the buyer's own CSV imported (**2 / 1 duplicate / 1 invalid**, the bad address named on its real line) and the file the product exported re-importing with **0 new rows**; an enrichment rule's `conditions` enforced at the door (**400**, every problem named) and honoured by the worker — a rule aimed at a tag visits **exactly the 2 leads carrying it** out of the **24** NEW leads in the workspace (the count is printed live), and the same tag written in capitals visits **none** |
 | `analytics` | A D2C brand reviews weekly revenue | snapshots frozen at **3,820** (revenue) / **214** (cart adds); "revenue < 5,000" rule **fires** and "cart adds < 50" stays **silent**; both-subscription and per-rule signatures **VERIFIED**; `lastFiredAt` read back from the product |
 | `flow` | One workflow wires "portal lead → alert the agent" | wrong secret **401**, right secret **202 QUEUED**; execution **COMPLETED** with step `notify (http_request) OK`; the templated alert body the agent received; signed `execution.completed` **VERIFIED** |
 | `connect` | Any business with channels | the engine ranks 17 seeded messages 0–100: churn risk + a 40-seat enquiry at **100**, marketing spam at **0** |
@@ -87,7 +87,8 @@ anti-SSRF/egress rule doing its job).
 All demos are re-runnable and self-cleaning: they suffix emails, metric names,
 event types, trigger paths and capture URLs with a per-run id, delete demo
 subscriptions left by earlier runs, and count only their own deliveries. The
-leadworks demo also removes the leads it created — a workspace with older data
+leadworks demo also removes the leads it created and the enrichment rules it
+ran — a workspace with older data
 will export its full contents, and the demo prints the workspace total so it can
 never be misread as a bug. Each demo's deliberate collision (the duplicate lead)
 still collides on purpose.

@@ -13,3 +13,5 @@ jobs:
         run: find . -name '*.mjs' -not -path './node_modules/*' -exec node --check {} \;
       - name: bash -n on every .sh
         run: find . -name '*.sh' -not -path './node_modules/*' -exec bash -n {} \;
+      - name: the site AI-visibility pack's own tests
+        run: node --test deploy/site-ai-pack/*.test.mjs

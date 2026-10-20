@@ -1,34 +1,48 @@
 # Site AI-visibility pack
 
-The live marketing site (`abetworks-website.onrender.com` → `abetworks.in`)
-is missing three files every AI assistant and crawler looks for. This pack
-is the drop-in that closes them — verified against the live site on 17 Oct:
+The live marketing site is a **static HTML services site** — `services/*.html`,
+a blog page, a company page — deployed from
+[`abetworks-website`](https://github.com/coding4vinayak/abetworks-website) to
+`abetworks-website.vercel.app`, with `abetworks.in` in front of it.
 
-| Probe (live, 17 Oct) | Now | After this pack |
+Probed live (20 Oct): `/llms.txt` → **404**, `/robots.txt` → **404**, and
+`/sitemap.xml` → **200 with 32 dead URLs** (it was written for a WordPress-era
+site; every `/blogs/<post>/` entry 404s). An index that names pages which are
+not there is worse than no index — it tells every crawler and every AI
+assistant that a third of the site is missing.
+
+| Probe (live, 20 Oct) | Now | After this pack |
 | --- | --- | --- |
-| `/llms.txt` | **404** | the machine-readable index of the whole site |
-| `/openapi.json` | **404** (the spec exists in AbetAPI, unplaced) | the canonical OpenAPI 3.1 contract |
-| `/robots.txt` | allow-list only, no AI directives | + explicit GPTBot / ClaudeBot / PerplexityBot / Google-Extended allows pointing at `llms.txt` |
+| `/llms.txt` | **404** | the machine-readable index, generated from the site's own pages |
+| `/robots.txt` | **404** | the allow-list plus explicit GPTBot / ClaudeBot / PerplexityBot / Google-Extended allows |
+| `/sitemap.xml` | 200, **32 of 47 URLs dead** | rebuilt from the same reviewed page list — 21 live pages + the 5 product hosts |
 
 This is fixpack items **F2–F4** from `ai-visibility-fixpack.md` (target:
 BlueRails AI visibility 95/100).
 
-## What's in `files/`
+## The first version of this pack was wrong, and why it matters
 
-- `llms.txt` — the index: every product with the pricing its own pricing
-  page states, every key page, the per-product `llms.txt` hosts, and the
-  OpenAPI pointer.
-- `openapi.json` — the canonical AbetAPI OpenAPI 3.1 spec (15 paths,
-  v1.0.2), the same contract the gateway serves at
-  `api.abetworks.in/api/v1/openapi`.
-- `robots.txt` — the live allow-list plus the AI block (for static sites).
-- `robots-route-snippet.md` — the merge instructions **if robots is a
-  Next.js route** (the live output looks like one — see below).
+It shipped one `llms.txt` for one **assumed** site: a Next.js app whose pages
+were `/products/leadgenius/` and friends, with a suite catalogue and a price
+for each product. The site that is actually deployed has **no product pages,
+no prices and no `/products/` directory at all** — and its own sitemap was
+full of dead links. Applying that pack unchanged would have published nine
+dead product links and a price list the site does not state: an AI-visibility
+*regression* dressed as a fix.
+
+So the index is now **generated from the site** and **verified against it**:
+
+- `site-pages.txt` — the reviewed page list (`path | label`). One entry per
+  line; `#` starts a comment, and every omission carries its reason. This is
+  the judgement call, kept in the open so the owner can change it.
+- `site-groups.json` — how those pages are grouped in the index.
+- `site-llms.mjs` — the generator. It **refuses to run** if the list names a
+  page the repository does not have, and it prints the pages that exist but
+  are not listed, so a decision to leave one out is visible rather than
+  silent. The `llms.txt` it writes links exactly the listed pages and the
+  hosts the site's own sitemap links to — nothing else.
 
 ## Applying it
-
-The site's source repo is still unidentified (Render → service
-`abetworks-website` → Settings shows the connected repo). Once it's known:
 
 ```sh
 # from a local clone:
@@ -39,43 +53,41 @@ deploy/site-ai-pack/apply.sh git@github.com:owner/site-repo.git
 deploy/site-ai-pack/apply.sh ~/path/to/site-repo --push
 ```
 
-The applier: refuses a dirty tree, always branches
-`seo/ai-visibility-pack` off `origin/main` (**never** commits on main),
-detects Next.js vs static, and if it finds a robots **route**
-(`app/robots.ts` / `src/app/robots.ts`) leaves `SITE-AI-PACK-robots.md` to
-merge by hand instead of writing a dead `public/robots.txt`. It prints the
-diff; pushing is opt-in.
+The applier: refuses a dirty tree, always branches `seo/ai-visibility-pack`
+off `origin/main` (**never** commits on main), detects Next.js vs static, and
+prints the diff; pushing is opt-in.
+
+- **Static site** → the index is generated from the site (`llms.txt`,
+  `robots.txt`, a rebuilt `sitemap.xml`), and the generator's verification
+  runs before anything is written.
+- **Next.js site** → the static files go in `public/`, plus the OpenAPI
+  contract, and if `robots` is a **route** (`app/robots.ts`) the AI block is
+  left at `SITE-AI-PACK-robots.md` to merge by hand rather than writing a
+  dead `public/robots.txt`.
+
+`SITE_ORIGIN` overrides the origin the index is written against
+(default `https://abetworks.in`).
 
 ## Verify after deploy (the acceptance-style one-liners)
 
 ```sh
 curl -s -o /dev/null -w '%{http_code}\n' https://abetworks.in/llms.txt          # 200
-curl -s https://abetworks.in/llms.txt | grep -q '## Products'                    # index intact
-curl -s https://abetworks.in/robots.txt | grep -E 'GPTBot|llms.txt'              # AI block live
-curl -s https://abetworks.in/openapi.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["openapi"], len(d["paths"]))'   # 3.1.0 15
+curl -s https://abetworks.in/llms.txt | grep -q '## Services'                   # index intact
+curl -s https://abetworks.in/robots.txt | grep -E 'GPTBot|llms.txt'             # AI block live
+curl -s https://abetworks.in/sitemap.xml | grep -c '<loc>'                      # 26
+# every URL the sitemap names must resolve — this is the check that was
+# failing before, and the one that keeps it failing if the site drifts again:
+curl -s https://abetworks.in/sitemap.xml | grep -o '<loc>[^<]*' | sed 's|<loc>||' \
+  | while read -r u; do printf '%s %s\n' "$(curl -s -o /dev/null -w '%{http_code}' "$u")" "$u"; done
 ```
 
-## Review before shipping — three deliberate edits
+## The pack's own tests
 
-`llms.txt` here is the long-ready draft, with three edits so it matches the
-software that actually exists. Confirm each is what you want shipped:
+```sh
+node --test deploy/site-ai-pack/site-llms.test.mjs
+```
 
-1. **Trial wording** — the draft said “14 days, no credit card”; the five
-   deployed apps take a card up front (14-day trial, cancel in the portal).
-   The pack says **card required at sign-up**. If the site's pricing pages
-   say otherwise, align them or edit this file back.
-2. **Product one-liners** — LeadWorks / AbetConnect / AbetAgent /
-   AbetAnalytics / AbetFlow / AbetAPI one-liners were aligned to the
-   deployed apps' real behavior (dedupe + CSV, ranked inbox, citations +
-   step traces, snapshots + alerts, webhook glue, scoped keys + signed
-   deliveries). NuCRM's description is left exactly as the site states it.
-   If a site product page still markets something different, fix the page
-   or this file — but they should not disagree.
-3. **“One data model, one login, one bill”** was removed — the deployed
-   apps are standalone with their own signups and connect through API keys
-   and signed webhooks. The suite still reads as a suite; it just doesn't
-   promise a shared login that doesn't exist yet.
-
-Also note the **Machine-readable** section names the product hosts
-(`analytics.abetworks.in` …) — those go live with the fleet deploy. If the
-site ships before the fleet, trim that section or ship them together.
+They pin the rules that keep the index honest: a manifest page the site does
+not have is an error; the index links exactly the listed pages and the
+sitemap's hosts; the sitemap escapes the `&` in a filename; robots names the
+AI assistants and points at the index. CI runs them on every push.

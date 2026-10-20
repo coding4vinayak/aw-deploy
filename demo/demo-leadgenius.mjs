@@ -3478,6 +3478,301 @@ async function main() {
       console.log("  (DATABASE_URL, the contact or the track missing — the engine-subject proof is skipped, not passed)");
     }
 
+    // ------------------- [27] what the traffic split declares -------------------
+    console.log("\n[27] The declared split is read against its arms, and against the cohorts it promised");
+
+    // `ABTest.trafficSplit` is a JSON copy of the variant rows' weights, written
+    // by POST /api/abtests in the same statement that writes them, and served to
+    // the buyer by GET /api/campaigns/:id — while the number that actually runs
+    // the test is `ABTestVariant.weight`, which `assignVariant` buckets on with a
+    // `% total` modulo. Two copies of one number, and no check between them.
+    // #25 and #26 made a column mean what a DIFFERENT field says about it; this
+    // one makes a column mean what the SAME number says in its other two places —
+    // the arms it was copied from, and the enrollments that arrived. Both
+    // questions are asked at the door that makes the promise: naming a winner
+    // claims these cohorts were the declared split.
+    const pool27 = [
+      { first: "Wren", last: "Ashby", company: "Kiln and Co", title: "COO" },
+      { first: "Bert", last: "Calcote", company: "Barrow Freight", title: "Owner" },
+      { first: "Cid", last: "Drabble", company: "Foundry Row", title: "VP Ops" },
+      { first: "Dot", last: "Ellery", company: "Marrow and Sons", title: "Director" },
+      { first: "Ed", last: "Fallow", company: "Tallow Hill II", title: "GM" },
+      { first: "Fay", last: "Grist", company: "Quarry Line", title: "Head of Ops" },
+      { first: "Gus", last: "Holloway", company: "Sable Removals", title: "COO" },
+      { first: "Hal", last: "Ives", company: "Tannery Works", title: "VP Delivery" },
+      { first: "Iso", last: "Jarrow", company: "Bellfoundry", title: "Owner" },
+      { first: "Jem", last: "Kestrel", company: "Pig and Iron", title: "Director" },
+      { first: "Kit", last: "Lomas", company: "Wharf and Wheel", title: "Head of Sales" },
+      { first: "Lud", last: "Marrow", company: "Gatehouse Mills", title: "COO" },
+    ];
+
+    const camp27 = await api("/api/campaigns", {
+      method: "POST",
+      body: { name: "Split fit run", goal: "Hold the number that lives in three places at once" },
+    });
+    const camp27Id = pickId(camp27.json, "campaign");
+    await api(`/api/campaigns/${camp27Id}`, { method: "PATCH", body: { status: "ACTIVE" } });
+    camp27Id
+      ? ok("campaign for the split-fit run created and ACTIVE", camp27Id)
+      : bad("split-fit campaign", `HTTP ${camp27.status}`);
+
+    const tplLedger = await api("/api/templates", {
+      method: "POST",
+      body: { name: "Split fit: the ledger", channel: "EMAIL", subject: "{{firstName}} - your ledger", body: "<p>Hi {{firstName}}, one question about {{company}}'s month-end ledger.</p>" },
+    });
+    const ledgerTplId = pickId(tplLedger.json, "template");
+    const tplMargin = await api("/api/templates", {
+      method: "POST",
+      body: { name: "Split fit: the margin", channel: "EMAIL", subject: "{{firstName}} - your margin", body: "<p>Hi {{firstName}}, one question about {{company}}'s gross margin.</p>" },
+    });
+    const marginTplId = pickId(tplMargin.json, "template");
+    ledgerTplId && marginTplId
+      ? ok("two email templates, one per arm — the copy the split exists to divide")
+      : bad("split-fit templates", JSON.stringify({ ledgerTplId, marginTplId }));
+
+    const seq27 = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Split fit: one track, two copies",
+        channel: "EMAIL",
+        campaignId: camp27Id,
+        stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: ledgerTplId, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const seq27Id = pickId(seq27.json, "sequence");
+    seq27Id
+      ? ok("one-step EMAIL track created for both arms", seq27Id)
+      : bad("split-fit sequence", JSON.stringify(seq27.json).slice(0, 200));
+
+    const ab27 = await api("/api/abtests", {
+      method: "POST",
+      body: {
+        campaignId: camp27Id,
+        name: "Ledger or margin",
+        hypothesis: "Which of two openings earns a reply",
+        variants: [
+          { name: "ledger", weight: 50, isControl: true, sequenceId: seq27Id },
+          { name: "margin", weight: 50, isControl: false, sequenceId: seq27Id, templateId: marginTplId },
+        ],
+      },
+    });
+    const test27 = ab27.json?.abTest;
+    ab27.status === 201 && test27?.status === "RUNNING"
+      ? ok("the test arrives RUNNING on a 50/50 pair of arms", `arms=${(test27?.variants ?? []).map((v) => `${v.name}:${v.weight}`).join(" ")}`)
+      : bad("split-fit test", `HTTP ${ab27.status} ${JSON.stringify(ab27.json).slice(0, 200)}`);
+
+    const readTest = async () =>
+      ((await api(`/api/campaigns/${camp27Id}`)).json?.abTests ?? []).find((t) => t.id === test27?.id) ?? null;
+    const splitOf = (row) => JSON.stringify(Object.fromEntries(Object.entries(row?.trafficSplit ?? {}).sort()));
+    const armsOf = (row) => JSON.stringify(Object.fromEntries((row?.variants ?? []).map((v) => [v.name, v.weight]).sort()));
+
+    // What the buyer is shown, before anything is edited.
+    const shown27 = await readTest();
+    splitOf(shown27) === armsOf(shown27) && splitOf(shown27) === '{"ledger":50,"margin":50}'
+      ? ok("the split the campaign detail reports IS the arms' own numbers", `trafficSplit=${JSON.stringify(shown27?.trafficSplit)}`)
+      : bad("reported split vs arms", JSON.stringify({ shown: shown27?.trafficSplit, arms: shown27?.variants?.map((v) => [v.name, v.weight]) }));
+
+    // The drift no API caller can write: turn the 50/50 into a canary with SQL,
+    // the way a migration or an operator at a psql prompt would, and write the
+    // copy to follow. The two questions are deliberately separated here — with
+    // the copy tracking the rows there is nothing to refuse, and the cohorts
+    // start to lie.
+    if (DATABASE_URL && test27?.id) {
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "ABTestVariant" SET "weight" = CASE WHEN "name" = 'ledger' THEN 100 ELSE 0 END WHERE "abTestId" = '${test27.id}';` +
+        ` UPDATE "ABTest" SET "trafficSplit" = '{"ledger":100,"margin":0}'::jsonb WHERE "id" = '${test27.id}';`], { stdio: "pipe" });
+    }
+
+    const enrolled27 = [];
+    for (const p of pool27) {
+      const email = `split.${p.first.toLowerCase()}.${RUN.slice(-6)}@tidewell.dev`;
+      const cid = await mkContact({ email, firstName: p.first, lastName: p.last, company: p.company, title: p.title });
+      const enr = await api("/api/enrollments", {
+        method: "POST",
+        body: { contactId: cid, sequenceId: seq27Id, campaignId: camp27Id },
+      });
+      enrolled27.push({ email, arm: enr.json?.enrollment?.abVariant?.name, seq: enr.json?.enrollment?.sequenceId });
+    }
+    const flooded27 = enrolled27.filter((e) => e.arm === "ledger").length;
+    const starved27 = enrolled27.filter((e) => e.arm === "margin").length;
+    flooded27 === 12 && starved27 === 0 && enrolled27.every((e) => e.seq === seq27Id)
+      ? ok("twelve contacts, every one in the arm the 100/0 rows serve", `ledger=${flooded27} margin=${starved27}`)
+      : bad("the canary rows filled one arm", JSON.stringify(enrolled27.map((e) => e.arm)));
+
+    const mailed27 = await waitFor(
+      () => (enrolled27.every((e) => msgsTo(e.email)[0]) ? true : null),
+      { timeout: 90000, label: "each of the twelve contacts' first email" },
+    ).catch(() => null);
+    const gotMail27 = enrolled27.filter((e) => msgsTo(e.email).length > 0).length;
+    mailed27 && gotMail27 === 12
+      ? ok("and the starved arm is not an empty inbox by accident: twelve prospects got one copy, none got the other", `mails=${gotMail27}`)
+      : bad("the canary cohort mailed its prospects", `sink rows for this cohort=${gotMail27}/12`);
+
+    // The numbers go back. The rows are honest again, the copy is honest again —
+    // and the twelve contacts are still where the canary window left them, which
+    // is the whole reason the second question is asked of enrollments rather than
+    // of weights.
+    if (DATABASE_URL && test27?.id) {
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "ABTestVariant" SET "weight" = 50 WHERE "abTestId" = '${test27.id}';` +
+        ` UPDATE "ABTest" SET "trafficSplit" = '{"ledger":50,"margin":50}'::jsonb WHERE "id" = '${test27.id}';`], { stdio: "pipe" });
+    }
+    const restored27 = await readTest();
+    splitOf(restored27) === armsOf(restored27) && splitOf(restored27) === '{"ledger":50,"margin":50}'
+      ? ok("the canary window is closed: arms and copy both say 50/50 again", `trafficSplit=${JSON.stringify(restored27?.trafficSplit)}`)
+      : bad("the canary was put back", JSON.stringify({ shown: restored27?.trafficSplit, arms: restored27?.variants?.map((v) => [v.name, v.weight]) }));
+
+    const cohortTry = await api(`/api/abtests/${test27.id}`, { method: "PATCH", body: { status: "COMPLETED", winningVariant: "ledger" } });
+    const whyCohort = String(cohortTry.json?.error ?? "");
+    // The arithmetic, re-done here: twelve enrollments against a 50% declaration
+    // expect six, and the distance is measured against the rest of the traffic.
+    const expected27 = 12 * 0.5;
+    const z27 = (12 - expected27) / Math.sqrt(12 * 0.5 * 0.5);
+    cohortTry.status === 409 &&
+      whyCohort.includes(`received 12 of 12 enrollments where ${expected27.toFixed(1)} were expected`) &&
+      whyCohort.includes(`z=+${z27.toFixed(2)}`) &&
+      whyCohort.includes("(2 arms are off their declared share)") &&
+      whyCohort.includes("Complete without a winner, or run a new test")
+      ? ok("the verdict is refused because these are not the cohorts that were declared", `z=+${z27.toFixed(2)} ${whyCohort.slice(0, 120)}`)
+      : bad("cohort refusal", `HTTP ${cohortTry.status} ${whyCohort.slice(0, 220)}`);
+
+    const untouched27 = await readTest();
+    untouched27?.status === "RUNNING" && untouched27?.winningVariant === null && untouched27?.completedAt === null
+      ? ok("and the refused verdict left nothing behind: still RUNNING, no winner, no end stamp", `status=${untouched27?.status}`)
+      : bad("refusal wrote the row anyway", JSON.stringify({ status: untouched27?.status, winningVariant: untouched27?.winningVariant, completedAt: untouched27?.completedAt }));
+
+    // The copy against the rows, asked FIRST: with both the declaration and the
+    // cohorts wrong, the operator is told the declaration does not describe the
+    // test — the half they can put right without touching a contact. Each edit is
+    // read back off the campaign detail before it is refused, because the refusal
+    // is the only thing standing between that value and the buyer. The read-back is
+    // compared as arm=weight pairs, not as bytes: the column is jsonb, and jsonb
+    // reorders object keys on the way in — {ledger:50,ghost:50} comes back
+    // {ghost:50,ledger:50}. The order is not the promise; the pairs are.
+    const asPairs = (v) => (v && typeof v === "object" && !Array.isArray(v)
+      ? Object.entries(v).map(([k, n]) => k + "=" + n).sort().join(",")
+      : JSON.stringify(v));
+    for (const [label, value, needle] of [
+      ["is not an object at all", '"fifty-fifty"', "is not an object of arm name to percentage"],
+      ["moved under the arms", { ledger: 30, margin: 70 }, "no longer describes it"],
+      ["names an arm that is gone", { ledger: 50, ghost: 50 }, 'no variant of this test is named'],
+    ]) {
+      if (!DATABASE_URL || !test27?.id) break;
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "ABTest" SET "trafficSplit" = '${JSON.stringify(value)}'::jsonb WHERE "id" = '${test27.id}';`], { stdio: "pipe" });
+      const lied = await readTest();
+      const tryDrift = await api(`/api/abtests/${test27.id}`, { method: "PATCH", body: { status: "COMPLETED", winningVariant: "ledger" } });
+      const why = String(tryDrift.json?.error ?? "");
+      tryDrift.status === 409 && why.includes(needle) && !why.includes("z=") && asPairs(lied?.trafficSplit) === asPairs(value)
+        ? ok(`a copy ${label} — reported to the campaign detail as ${JSON.stringify(lied?.trafficSplit)} — is refused before the cohorts are asked`, why.slice(0, 150))
+        : bad(`copy ${label} refusal`, `HTTP ${tryDrift.status} served=${JSON.stringify(lied?.trafficSplit)} ${why.slice(0, 170)}`);
+    }
+
+    if (DATABASE_URL && test27?.id) {
+      execFileSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-c",
+        `UPDATE "ABTest" SET "trafficSplit" = '{"ledger":50,"margin":50}'::jsonb WHERE "id" = '${test27.id}';`], { stdio: "pipe" });
+    }
+    const closeBlind = await api(`/api/abtests/${test27.id}`, { method: "PATCH", body: { status: "COMPLETED" } });
+    closeBlind.status === 200 && closeBlind.json?.abTest?.status === "COMPLETED" &&
+      closeBlind.json?.abTest?.winningVariant === null && closeBlind.json?.abTest?.confidence === null
+      ? ok("the refusal is to the verdict, not to the close: it ends with no winner and no invented number", `confidence=${closeBlind.json?.abTest?.confidence}`)
+      : bad("close without a winner", `HTTP ${closeBlind.status} ${JSON.stringify(closeBlind.json).slice(0, 200)}`);
+
+    // And the case the alarm must keep silent about. Its own campaign, because a
+    // RUNNING test on the one below would rewrite an enroll that names a sequence.
+    const camp27b = await api("/api/campaigns", {
+      method: "POST",
+      body: { name: "Split fit run: an honest half", goal: "Prove the check does not scold a small cohort" },
+    });
+    const camp27bId = pickId(camp27b.json, "campaign");
+    await api(`/api/campaigns/${camp27bId}`, { method: "PATCH", body: { status: "ACTIVE" } });
+    const seq27b = await api("/api/sequences", {
+      method: "POST",
+      body: {
+        name: "Split fit: the same track again",
+        channel: "EMAIL",
+        campaignId: camp27bId,
+        stepsConfig: [{ stepNumber: 1, channel: "EMAIL", templateId: ledgerTplId, delayDays: 0, delayHours: 0 }],
+      },
+    });
+    const seq27bId = pickId(seq27b.json, "sequence");
+    const ab27b = await api("/api/abtests", {
+      method: "POST",
+      body: {
+        campaignId: camp27bId,
+        name: "Ledger or margin, honestly",
+        hypothesis: "The same two openings, with the split left alone",
+        variants: [
+          { name: "ledger", weight: 50, isControl: true, sequenceId: seq27bId },
+          { name: "margin", weight: 50, isControl: false, sequenceId: seq27bId, templateId: marginTplId },
+        ],
+      },
+    });
+    const test27b = ab27b.json?.abTest;
+    camp27bId && seq27bId && test27b?.status === "RUNNING"
+      ? ok("a second test, untouched rows, its own campaign", `arms=${(test27b?.variants ?? []).map((v) => `${v.name}:${v.weight}`).join(" ")}`)
+      : bad("honest second test", JSON.stringify({ camp27bId, seq27bId, status: ab27b.status }).slice(0, 200));
+
+    // Contacts are created and enrolled until both arms have someone; the arm is
+    // predicted from the same hash the server uses, so the cohort is known before
+    // the enroll is sent rather than hoped for.
+    const honest27 = [];
+    for (const p of pool27) {
+      const armOf = { ledger: 0, margin: 0 };
+      honest27.forEach((h) => { armOf[h.got] += 1; });
+      if (armOf.ledger >= 1 && armOf.margin >= 1) break;
+      const email = `honest.${p.first.toLowerCase()}.${RUN.slice(-6)}@tidewell.dev`;
+      const cid = await mkContact({ email, firstName: p.first, lastName: p.last, company: p.company, title: p.title });
+      const expectedArm = predictArm(test27b, cid);
+      const enr = await api("/api/enrollments", {
+        method: "POST",
+        body: { contactId: cid, sequenceId: seq27bId, campaignId: camp27bId },
+      });
+      honest27.push({ email, expected: expectedArm, got: enr.json?.enrollment?.abVariant?.name, seq: enr.json?.enrollment?.sequenceId });
+    }
+    const honestLedger = honest27.filter((h) => h.got === "ledger").length;
+    const honestMargin = honest27.filter((h) => h.got === "margin").length;
+    const honestN = honest27.length;
+    const honestZ = (honestLedger - honestN * 0.5) / Math.sqrt(honestN * 0.5 * 0.5);
+    honest27.every((h) => h.got === h.expected && h.seq === seq27bId) && honestLedger >= 1 && honestMargin >= 1
+      ? ok("the small cohorts came out where their hashes put them, both arms filled", `ledger=${honestLedger} margin=${honestMargin} of ${honestN}`)
+      : bad("honest cohort assignment", JSON.stringify(honest27.map((h) => [h.expected, h.got])));
+    Math.abs(honestZ) < 3.290527
+      ? ok(`the same arithmetic on THESE cohorts says |z|=${Math.abs(honestZ).toFixed(2)} - a handful of contacts cannot disprove a 50/50, and is not lectured about it`, `n=${honestN}`)
+      : bad("small cohort alarmed", `|z|=${Math.abs(honestZ).toFixed(2)} on ${honestN} enrollments`);
+
+    const sentArms27 = await waitFor(async () => {
+      if (!DATABASE_URL) return null;
+      const count = (arm) =>
+        execFileSync("psql", [DATABASE_URL, "-Atc",
+          `SELECT count(*) FROM "Activity" a JOIN "Enrollment" e ON e.id = a."enrollmentId" JOIN "ABTestVariant" v ON v.id = e."abVariantId" WHERE v."abTestId" = '${test27b?.id}' AND v."name" = '${arm}' AND a."type" = 'SENT';`],
+          { encoding: "utf8" }).trim();
+      const pair = { ledger: count("ledger"), margin: count("margin") };
+      return Number(pair.ledger) > 0 && Number(pair.margin) > 0 ? pair : null;
+    }, { timeout: 90000, label: "a SENT activity in both honest arms" }).catch(() => null);
+    sentArms27
+      ? ok("both honest arms sent, so the verdict below has evidence rather than an excuse", `ledger=${sentArms27.ledger} margin=${sentArms27.margin}`)
+      : bad("honest arms never sent", JSON.stringify(sentArms27));
+
+    const honestComplete = await api(`/api/abtests/${test27b?.id}`, { method: "PATCH", body: { status: "COMPLETED", winningVariant: "ledger" } });
+    const honestConfidence = honestComplete.json?.abTest?.confidence;
+    honestComplete.status === 200 && honestComplete.json?.abTest?.status === "COMPLETED" && typeof honestConfidence === "number"
+      ? ok("and the split that held is allowed its verdict: the same door, the same checks, nothing to refuse", `confidence=${honestConfidence} winner=${honestComplete.json?.abTest?.winningVariant}`)
+      : bad("honest completion refused", `HTTP ${honestComplete.status} ${String(honestComplete.json?.error ?? "").slice(0, 200)}`);
+
+    const residue27 = {};
+    for (const [key, sql] of [
+      ["copies", 'SELECT count(*) FROM "ABTest" a WHERE a."trafficSplit"::jsonb <> (SELECT coalesce(jsonb_object_agg(v.name, v.weight), \'{}\'::jsonb) FROM "ABTestVariant" v WHERE v."abTestId" = a.id);'],
+      ["totals", 'SELECT count(*) FROM "ABTest" a WHERE (SELECT coalesce(sum(v.weight), 0) FROM "ABTestVariant" v WHERE v."abTestId" = a.id) <> 100;'],
+    ]) {
+      residue27[key] = DATABASE_URL
+        ? execFileSync("psql", [DATABASE_URL, "-Atc", sql], { encoding: "utf8" }).trim()
+        : "skipped";
+    }
+    residue27.copies === "0" && residue27.totals === "0"
+      ? ok("the run leaves no test reporting a split that is not its arms, and no arms that do not sum to 100", JSON.stringify(residue27))
+      : bad("the run left a split out of step with its arms", JSON.stringify(residue27));
+
     // ------------------------------------------------------------ summary --
     const failed = checks.filter((c) => !c.pass);
     console.log(`\n═══ ${checks.length - failed.length}/${checks.length} checks passed ═══`);

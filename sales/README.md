@@ -17,7 +17,7 @@ one-command demo whose numbers print as they happen:
 
 | App | Buys when the prospect says | Prove it with |
 | --- | --- | --- |
-| **LeadWorks** — $49/mo | "our lead lists are a mess — dupes, junk fields, exports that break" | `demo/run-demo.sh leadworks` — a duplicate refused **409** at the door, validation trail, dedupe sweep, signed `lead.created` / `export.completed` deliveries, CSV export |
+| **LeadWorks** — $49/mo | "our lead lists are a mess — dupes, junk fields, exports that break" | `demo/run-demo.sh leadworks` — a duplicate refused **409** at the door, validation trail, dedupe sweep, signed `lead.created` / `export.completed` deliveries, CSV export, the buyer's own CSV imported with the bad row named on its line, and an enrichment rule that visits **exactly the leads its conditions name** (2 of 24) while a nonsense declaration is **400** at the door |
 | **LeadGenius** — $29/user/mo | "our cold email ends up in spam and we rotate inboxes by hand" | `demo/run-demo.sh leadgenius` — a 3-prospect sequence over real SMTP: a signed **bounce** stops contact one at a single email, a signed **reply** stops contact two, contact three completes — every outbound signature verified |
 | **AbetAgent** — $99/mo | "AI does the work but nobody can verify it" | citations on every answer, step traces of what the agent did, human escalation when a task needs one |
 | **AbetConnect** — $24/agent/mo | "five channels, zero idea who actually matters" | `demo/run-demo.sh connect` — 17 messages ranked 0–100: the 40-seat enquiry **100**, the marketing blast **0** |

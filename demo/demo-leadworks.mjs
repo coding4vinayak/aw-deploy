@@ -8,6 +8,9 @@
 //   6. the buyer's own CSV imports; the in-file duplicate and the bad email are named
 //      and the file the product exported re-imports with zero new rows
 //   7. every webhook delivery is signature-verified in-process
+//   8. an enrichment rule's conditions decide which leads the worker visits —
+//      three unspeakable declarations are refused at the door, and four accepted
+//      rules visit exactly the leads they name (2, 2, 0, 0) out of a wider workspace
 //
 // Re-runnable: emails/phones carry a per-run suffix so a second run starts clean
 // while the in-run duplicate still collides on purpose.
@@ -168,6 +171,69 @@ for (const [i, h] of mine.entries()) {
   log(`  ${String(i + 1).padStart(2)}. ${h.at.slice(11, 19)}  ${body.event.padEnd(17)} ${(body.data?.email ?? body.data?.exportId ?? "").slice(0, 34).padEnd(35)} ${ok ? "signature VERIFIED ✓" : "UNVERIFIED ✗"}${ts}`);
 }
 log(`\n  ${verified}/${mine.length} deliveries verified — the skipped rows produced no event (correct).`);
+
+log("\n═══ STEP 9 — an enrichment rule reaches the leads its conditions name ═══");
+// Two of this run's leads take a tag only they carry, so a rule can be aimed at
+// exactly them and the number of leads it puts in front of the worker is a fact
+// the demo can hold the product to.
+const AIM = `aim-${RUN}`;
+const [aimA, aimB, heldBack] = [ids[1], ids[4], ids[2]];
+for (const id of [aimA, aimB]) {
+  const lead = await (await fetch(`${API}/leads/${id}`, { headers: H })).json();
+  const patched = await fetch(`${API}/leads/${id}`, { method: "PATCH", headers: H, body: JSON.stringify({ tags: [...(lead.tags ?? []), AIM] }) });
+  log(`  ${(lead.firstName + " " + lead.lastName).padEnd(14)} (${lead.seniority}) takes tag ${AIM} -> ${patched.status}`);
+}
+const bystander = await (await fetch(`${API}/leads/${heldBack}`, { headers: H })).json();
+log(`  ${(bystander.firstName + " " + bystander.lastName).padEnd(14)} (${bystander.seniority}) is held back: tags [${(bystander.tags ?? []).join(", ")}]`);
+
+const openLeads = await (await fetch(`${API}/leads?status=NEW&limit=100`, { headers: H })).json();
+const openCount = openLeads.total ?? (openLeads.items ?? []).length;
+log(`  a rule that declares nothing reaches every NEW lead in the workspace: ${openCount} right now`);
+
+const rulePost = async (conditions) => {
+  const r = await fetch(`${API}/enrichment-rules`, {
+    method: "POST",
+    headers: H,
+    body: JSON.stringify({ name: `leadworks-${RUN}`, trigger: "MANUAL", conditions, actions: { enrich: ["companySize", "industry"] }, providers: ["apollo"] }),
+  });
+  return { status: r.status, body: await r.json() };
+};
+for (const [label, conditions] of [
+  ["a key no Lead column spells", { department: "Sales" }],
+  ["a status the column does not hold", { status: ["NEW_LEAD"] }],
+  ["a score range no number can satisfy", { score: { gte: 90, lte: 40 } }],
+]) {
+  const refused = await rulePost(conditions);
+  log(`  rule declaring ${label}: ${refused.status}  ${refused.body.error}`);
+  check(refused.status === 400, `the door refuses a rule declaring ${label}`);
+}
+
+// The worker's per-lead counters measure its reach. Every visit currently ends at
+// a provider stub whose write is a placeholder (README names that gap), so a
+// visited lead is counted as failed rather than enriched — what this step holds
+// the product to is which leads the rule puts in front of the worker.
+log(`  the measure is the worker's per-lead counters: reach, not enrichment (the provider stubs are a separate gap)`);
+const sweep = async (label, conditions, expected) => {
+  const created = await rulePost(conditions);
+  check(created.status === 201, `rule accepted: ${label}`);
+  if (created.status !== 201) return;
+  const started = await (await fetch(`${API}/enrichment-rules/${created.body.id}?action=run`, { method: "POST", headers: H })).json();
+  const job = await waitJob(started.jobId);
+  const visits = (job.processedItems ?? 0) + (job.failedItems ?? 0);
+  log(`  ${label.padEnd(38)} stored=${JSON.stringify(created.body.conditions)}  applies to: ${started.appliesTo}`);
+  log(`  ${" ".repeat(38)} job ${job.status}: ${visits} lead(s) visited (processed=${job.processedItems}, failed=${job.failedItems})`);
+  check(visits === expected, `${label}: ${visits} visited, ${expected} expected`);
+  await fetch(`${API}/enrichment-rules/${created.body.id}`, { method: "DELETE", headers: H });
+};
+await sweep("tagged", { tags: [AIM] }, 2);
+await sweep("tagged AND seniority VP", { tags: [AIM], seniority: ["VP"] }, 2);
+await sweep("tagged AND seniority IC", { tags: [AIM], seniority: ["IC"] }, 0);
+await sweep("the same tag in caps", { tags: [AIM.toUpperCase()] }, 0);
+log(`  the aimed rule reached 2 of the ${openCount} NEW leads — a declaration narrows, never widens`);
+check(openCount > 2, `2 < ${openCount}: the rule's crowd is smaller than the workspace's`);
+
+const left = await (await fetch(`${API}/enrichment-rules`, { headers: H })).json();
+check((left.rules ?? []).filter((r) => r.name === `leadworks-${RUN}`).length === 0, "no rule from this run is left behind");
 
 // Hygiene: remove the leads this run created, so re-runs start from the same state.
 const cleanupIds = [...ids, ...importedIds];

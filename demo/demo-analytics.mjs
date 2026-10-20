@@ -141,6 +141,52 @@ const revoke = await fetch(`${API}/snapshots/${snapshotId}/share`, { method: "DE
 check("revoke answers revoked:true", revoke.status === 200 && (await revoke.json()).revoked === true, `status=${revoke.status}`);
 check("the same link 404s after revoke", (await fetch(link)).status === 404);
 log(`  the read-only link, now revoked: ${link}`);
+log("\n═══ STEP 10 — the number arrives on its own (weekly report) ═══");
+const reportAddress = `board@${RUN}.example`;
+const scheduled = await post("/reports", {
+  metricId: mA.body.id,
+  email: reportAddress,
+  dayOfWeek: 1, // Monday
+  hour: 8,
+  timezone: "Europe/Berlin",
+  windowDays: 7,
+});
+check("the schedule is created", scheduled.status === 201, `status=${scheduled.status}`);
+const reportId = scheduled.body.report?.id;
+const nextRun = scheduled.body.report?.nextRunAt;
+check("it says when it next sends", typeof nextRun === "string" && nextRun.length > 10, `next=${nextRun}`);
+log(`  every Monday at 08:00 (Europe/Berlin) — next ${nextRun}`);
+
+// The schedule fires on its own; the demo sends it now so the email can be
+// read on the call. It is the same email the schedule sends.
+const sentNow = await fetch(`${API}/reports/${reportId}/send`, { method: "POST", headers: H });
+check("send now answers 200", sentNow.status === 200, `status=${sentNow.status}`);
+
+const mails = capture.items.filter((h) => h.url === "/email").map((h) => JSON.parse(h.body));
+const mail = mails[mails.length - 1];
+check("an email was really delivered", !!mail, `delivered=${mails.length}`);
+check("it went to the scheduled address", JSON.stringify(mail?.to) === JSON.stringify([reportAddress]), JSON.stringify(mail?.to));
+
+const mailText = mail?.text ?? "";
+const headline = String(sA.body.headline).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+check("it carries the frozen number", mailText.includes(headline), `headline=${headline}`);
+check("it carries the definition as-run", mailText.includes(`sum of purchase_${RUN}`), "sum of purchase_<run>");
+check("it carries the range", /Range: /.test(mailText));
+
+const shareLink = (mailText.match(/http\S+\/s\/[A-Za-z0-9_-]+/) ?? [])[0];
+check("it carries a read-only link", !!shareLink, shareLink ?? "(none)");
+if (shareLink) {
+  const page = await fetch(shareLink.replace(/^https?:\/\/[^/]+/, APP_BASE));
+  const html = await page.text();
+  check("anyone can open the link, with no key", page.status === 200, `status=${page.status}`);
+  check("the link shows the same frozen number", html.replace(/,/g, "").includes(String(sA.body.headline)));
+}
+
+const unsubscribed = await fetch(`${API}/reports/${reportId}`, { method: "DELETE", headers: H });
+check("cancelling unsubscribes", unsubscribed.status === 200, `status=${unsubscribed.status}`);
+const remaining = await (await fetch(`${API}/reports`, { headers: H })).json();
+check("and the schedule is gone", (remaining.reports ?? []).length === 0, `left=${(remaining.reports ?? []).length}`);
+
 if (failures) {
   log(`\n${failures} check(s) FAILED`);
   process.exitCode = 1;

@@ -14,6 +14,7 @@
 #   demo/run-demo.sh agent       # the agent that cites, or escalates — signed run events
 #
 # Env: AW_REPOS_DIR (default ~/repos) · HOOK_PORT (default 3799) · SINK_PORT (default 2525, leadgenius only)
+#      LI_PORT (default 3399, leadgenius only — the LinkedIn stub the app's LINKEDIN_API_BASE is pointed at)
 #
 # Prerequisites (once per machine): local Postgres + Redis, each app's `.env`
 # pointing at its local database, and `npm run db:deploy` + seed where it exists.
@@ -76,6 +77,12 @@ if [ "$NAME" = "leadgenius" ]; then
   # export reaches both (the app boot below and the node call at the end).
   INBOUND_WEBHOOK_SIGNING_SECRET="${INBOUND_WEBHOOK_SIGNING_SECRET:-lg-demo-inbound-secret}"
   export INBOUND_WEBHOOK_SIGNING_SECRET
+  # Step [19]'s LinkedIn stand-in: the app's send path reads its API host from
+  # LINKEDIN_API_BASE (the egress guard allows the env shape, never a
+  # caller-movable config address), the demo process listens on LI_PORT, and
+  # this export reaches the app boot below.
+  LI_PORT="${LI_PORT:-3399}"; export LI_PORT
+  LINKEDIN_API_BASE="http://127.0.0.1:${LI_PORT}"; export LINKEDIN_API_BASE
   # The demo's hygiene reset + DB cross-check use the app's own connection
   # string; with one missing, the demo still runs and says what it skipped.
   if [ -f "$REPOS_DIR/$APP/.env.local" ]; then
@@ -125,15 +132,24 @@ fi
 
 echo "── demo: $NAME  (app=$APP, port=$PORT, capture=:$HOOK_PORT) ──"
 
+# The weekly-report demo needs the app to be able to *send* mail, so the email
+# it produces is a real HTTP delivery to the same in-process capture server the
+# demo already runs. An app with no mail provider writes messages to its log
+# instead — honest, but it is not a delivery, and a demo must not show one.
+MAIL_ENV=""
+if [ "$NAME" = "analytics" ] || [ "$NAME" = "clinic" ]; then
+  MAIL_ENV="EMAIL_WEBHOOK_URL=http://127.0.0.1:${HOOK_PORT}/email"
+fi
+
 # ABET_ALLOW_PRIVATE_TARGETS=1 lets the app deliver to the local capture server;
 # in production this override is what every app deliberately refuses.
-(cd "$REPOS_DIR/$APP" && ABET_ALLOW_PRIVATE_TARGETS=1 PORT=$PORT nohup npm run start > "$LOG" 2>&1 &)
+(cd "$REPOS_DIR/$APP" && env ABET_ALLOW_PRIVATE_TARGETS=1 PORT="$PORT" $MAIL_ENV nohup npm run start > "$LOG" 2>&1 &)
 
 cleanup() {
   kill_port "$PORT"
   if [ "$NAME" = "chain" ]; then kill_port "${CONNECT_PORT:-3400}"; fi
   if [ "$NAME" = "admissions" ] || [ "$NAME" = "clinic" ]; then kill_port "${FLOW_PORT:-3500}"; fi
-  if [ "$NAME" = "leadgenius" ]; then kill_port "${SINK_PORT:-2525}"; fi
+  if [ "$NAME" = "leadgenius" ]; then kill_port "${SINK_PORT:-2525}"; kill_port "${LI_PORT:-3399}"; fi
 }
 trap cleanup EXIT
 

@@ -12,7 +12,7 @@ Every billing engine is already merged; this is the **Stripe side**: products, p
 | leadworks | LeadWorks | $49/mo · $490/yr | flat | `STRIPE_PRICE_FLAT_MONTHLY` · `_ANNUAL` | `https://leadworks.abetworks.in/api/billing/webhook` |
 | abetConnect | AbetConnect | $24/mo · $240/yr **per agent** | seat | `STRIPE_PRICE_SEAT_MONTHLY` · `_ANNUAL` | `https://connect.abetworks.in/api/billing/webhook` |
 
-Annual = "two months free" on every app (matches the pricing pages). Checkout applies a **14-day free trial** automatically (4 apps; Connect's checkout has no `trial_period_days` today — add one line there if you want the same trial).
+Annual = "two months free" on every app (matches the pricing pages). Checkout applies a **14-day free trial** on **all five apps** — card collected at checkout, first invoice on day 14, cancel in the portal before then and nothing is charged. Connect has no job queue, so it sends the trial-started and trial-converted mails but not the day-3/day-1 reminders; its members page and trial-started mail both name the first-charge date.
 
 ## 1. Create products + prices (CLI, repeat per app)
 

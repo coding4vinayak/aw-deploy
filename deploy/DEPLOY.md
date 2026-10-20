@@ -108,9 +108,12 @@ hub answers `storage:"writable"`, pdf its tool count). A **503** means
 DB/migrations — or, for the hub/pdf, storage — are wrong, and because the
 blueprint makes `/api/health` the health check, traffic never switched to that
 deploy. These exact commands were
-rehearsed on 19 Oct on clean clones against virgin databases — the build meets
-an empty schema and works, and every app's declared `/api/health` answered
-`{"ok":true,"db":"up"}` on the first boot (five apps, 5/5 steps · 8/8 checks).
+rehearsed on 19–20 Oct on clean clones against virgin databases — the build
+meets an empty schema and works, every database app's declared `/api/health`
+answered `{"ok":true,"db":"up"}` on the first boot, and the stateless hub/pdf
+built, started and proved their own storage with no database at all (all nine
+deployables: the five paid apps and flow/api 5/5 steps · 8/8 checks, hub
+3/3 · 7/7, pdf 3/3 · 8/8).
 `acceptance.sh` then grades *behavior* from the outside: dashboard routes gate
 anonymous visitors, billing webhooks reject unsigned and forged payloads (4xx,
 never 2xx/5xx), abetapi refuses anonymous callers and publishes its contract,

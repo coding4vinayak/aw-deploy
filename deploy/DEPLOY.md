@@ -232,10 +232,20 @@ vars, re-run the smoke sweep — then the suite is sellable.
   `LEAD_NOTIFY_URL` POSTs each capture to Slack/Zapier/etc. Push new emails
   into the ESP list with the tool name as a merge field; the ESP confirmation
   is the consent (double opt-in, GDPR-hygienic).
-- **P1 — the drip that converts** (5–7 emails / 14 days, triggered per tool
-  used): Day 0 full report → Day 2 "the #1 thing your result got wrong" → Day 5
-  case-style proof → Day 8 the paid-tool offer at $9–19/mo → Day 13 breakup +
-  survey. The `tool` field in `leads.json` picks which sibling to pitch.
+- **The consent is recorded, and it is narrow.** The hub's capture box promises
+  the visitor **the report, and one email the day the paid version of that
+  tool ships — and nothing else** (no newsletter, no drip). Each lead carries
+  that scope in its `consent` column (`report-and-launch-email`), so the ESP
+  import carries it too. That is the question to answer before sending
+  anything: a lead captured on one email is not a lead a drip may be sent to.
+- **P1 — a drip needs its own consent** (5–7 emails / 14 days, triggered per
+  tool used): Day 0 full report → Day 2 "the #1 thing your result got wrong" →
+  Day 5 case-style proof → Day 8 the paid-tool offer at $9–19/mo → Day 13
+  breakup + survey. **As captured today, that drip is not consented** — the box
+  promises one report and one launch email. So: add the opt-in to the box and
+  the privacy page first (and record it in the `consent` column), or drop the
+  drip and send the honest sequence — the report and the launch email. The
+  `tool` field in `leads.json` picks which sibling to pitch.
 - **P2:** watch free→email→paid per tool; A/B cap thresholds; suppress
   non-openers after the breakup.
 

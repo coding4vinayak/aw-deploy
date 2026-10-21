@@ -1,0 +1,173 @@
+{
+  "origin": "https://abetworks.in",
+  "siteName": "Abet Works",
+  "image": "/assets/img/og.png",
+  "logo": "/assets/img/logo.png",
+  "organization": {
+    "@type": "Organization",
+    "name": "Abet Works",
+    "url": "https://abetworks.in/",
+    "logo": "https://abetworks.in/assets/img/logo.png",
+    "image": "https://abetworks.in/assets/img/og.png",
+    "description": "Abet Works is a data-and-AI services company in Mumbai: data analytics, artificial intelligence, digital services, business consultancy and content & SEO, for companies that ship.",
+    "email": "admin@abetworks.in",
+    "telephone": "+91 8850777453",
+    "founder": {
+      "@type": "Person",
+      "name": "Vinayak Sonawane",
+      "jobTitle": "Founder & CEO"
+    },
+    "address": {
+      "@type": "PostalAddress",
+      "streetAddress": "301, VS Road",
+      "addressLocality": "Mumbai",
+      "addressRegion": "Maharashtra",
+      "addressCountry": "IN"
+    },
+    "contactPoint": {
+      "@type": "ContactPoint",
+      "contactType": "sales",
+      "email": "admin@abetworks.in",
+      "telephone": "+91 8850777453",
+      "areaServed": "IN",
+      "availableLanguage": ["English", "Hindi", "Marathi"]
+    },
+    "sameAs": [
+      "https://www.facebook.com/profile.php?id=61566619705918",
+      "https://www.linkedin.com/company/abetworks",
+      "https://x.com/abetworks",
+      "https://www.instagram.com/abetworks"
+    ]
+  },
+  "pages": {
+    "/": {
+      "file": "index.html",
+      "title": "Abet Works | Data, AI and Digital Services",
+      "description": "Abet Works offers innovative digital solutions powered by AI, focusing on data analytics, machine learning, and custom software development.",
+      "type": "Organization"
+    },
+    "/services/Data_Analytics.html": {
+      "file": "services/Data_Analytics.html",
+      "title": "Data Analytics Services - Abet Works",
+      "description": "Abet Works offers advanced data analytics services to help businesses leverage the power of their data.",
+      "type": "Service",
+      "name": "Data Analytics"
+    },
+    "/services/ai.html": {
+      "file": "services/ai.html",
+      "title": "Artificial Intelligence - Abet Works",
+      "description": "Abet Works offers cutting-edge artificial intelligence solutions for businesses looking to leverage the power of machine learning.",
+      "type": "Service",
+      "name": "Artificial Intelligence"
+    },
+    "/services/digital_services.html": {
+      "file": "services/digital_services.html",
+      "title": "Digital Services - Abet Works",
+      "description": "Abet Works delivers comprehensive digital services, including web development, content creation and SEO.",
+      "type": "Service",
+      "name": "Digital Services"
+    },
+    "/services/Bussiness_consultancy.html": {
+      "file": "services/Bussiness_consultancy.html",
+      "title": "Business Consultancy - Abet Works",
+      "description": "Abet Works provides expert business consultancy services, helping companies identify opportunities and implement effective strategies.",
+      "type": "Service",
+      "name": "Business Consultancy"
+    },
+    "/services/Resources.html": {
+      "file": "services/Resources.html",
+      "title": "Resources & Opportunities - Abet Works",
+      "description": "Company resources, opportunities and downloads from Abet Works.",
+      "type": "WebPage"
+    },
+    "/services/collaboration.html": {
+      "file": "services/collaboration.html",
+      "title": "Collaboration Opportunity with Abet Works",
+      "description": "Explore collaboration opportunities with Abet Works for innovative projects.",
+      "type": "WebPage"
+    },
+    "/services/courses.html": {
+      "file": "services/courses.html",
+      "title": "Coming Soon - Curated Courses",
+      "description": "Exciting courses are on the way!",
+      "type": "WebPage"
+    },
+    "/services/aboutus.html": {
+      "file": "services/aboutus.html",
+      "title": "About Us - Abet Works",
+      "description": "Abet Works is a Mumbai data-and-AI services company. Clients kept asking to license the internal tooling — that became the Abetworks software suite.",
+      "type": "AboutPage"
+    },
+    "/services/contact.html": {
+      "file": "services/contact.html",
+      "title": "Contact Us - Abet Works",
+      "description": "Get in touch with Abet Works — 301, VS Road, Mumbai, India. We reply to every enquiry.",
+      "type": "ContactPage"
+    },
+    "/services/privacy.html": {
+      "file": "services/privacy.html",
+      "title": "Privacy Policy - Abet Works",
+      "description": "How Abet Works handles your data: what is collected, why, and how to have it deleted.",
+      "type": "WebPage"
+    },
+    "/services/t&c.html": {
+      "file": "services/t&c.html",
+      "title": "Terms and Conditions - Abet Works",
+      "description": "The terms and conditions for Abet Works services.",
+      "type": "WebPage"
+    },
+    "/blogs.html": {
+      "file": "blogs.html",
+      "title": "Abet Works - Blogs",
+      "description": "Insights and articles from Abet Works on AI, data analytics and digital services.",
+      "type": "Blog"
+    },
+    "/services/blog/ai-revolution.html": {
+      "file": "services/blog/ai-revolution.html",
+      "title": "How AI is Revolutionizing Business Processes - Abet Works",
+      "description": "Discover how AI is transforming business processes for SMEs.",
+      "type": "BlogPosting"
+    },
+    "/services/blog/productivity-by-decision.html": {
+      "file": "services/blog/productivity-by-decision.html",
+      "title": "The Importance of Predictive Analytics in Decision Making - Abet Works",
+      "description": "How predictive analytics turns a business's history into decisions it can act on.",
+      "type": "BlogPosting"
+    },
+    "/services/data_anyalitics_services/visual_scrapper.html": {
+      "file": "services/data_anyalitics_services/visual_scrapper.html",
+      "title": "Data Visual Scraper - Abet Works",
+      "description": "Abet Works offers advanced data analytics services to help businesses leverage the power of their data — with a visual scraper for the pages that feed it.",
+      "type": "WebApplication",
+      "name": "Data Visual Scraper"
+    },
+    "/services/data_anyalitics_services/visual_scrap2.html": {
+      "file": "services/data_anyalitics_services/visual_scrap2.html",
+      "title": "Visual Scraper - Abet Works",
+      "description": "Abet Works offers advanced data scraping services to help businesses extract what they need.",
+      "type": "WebApplication",
+      "name": "Visual Scraper"
+    },
+    "/services/products/product_consultacy.html": {
+      "file": "services/products/product_consultacy.html",
+      "title": "Powerful Digital Solutions With AI - Abet Works",
+      "description": "Empowering businesses with innovative solutions: custom software, data and AI, built by Abet Works.",
+      "type": "Service",
+      "name": "Custom Software & AI Solutions"
+    },
+    "/services/products/product_data_anyalitics.html": {
+      "file": "services/products/product_data_anyalitics.html",
+      "title": "Powerful Data Analytics Solutions With AI - Abet Works",
+      "description": "Transforming data into actionable insights: Abet Works' data analytics services.",
+      "type": "Service",
+      "name": "Data Analytics Solutions"
+    },
+    "/services/products/product_digital.html": {
+      "file": "services/products/product_digital.html",
+      "title": "Digital Services - Abet Works",
+      "description": "Empowering businesses with innovative digital services: web, content, SEO and AI.",
+      "type": "Service",
+      "name": "Digital Services"
+    }
+  }
+}

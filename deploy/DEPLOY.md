@@ -78,6 +78,61 @@ answer 500, without a mail provider mail is logged instead of sent, without an
 LLM key the AI paths are omitted. Each repo's test suite fails if the manifest
 ever falls behind the code.)
 
+## 3a. The site: two of them, and only one can be the apex
+
+Measured 21 Oct, and this is the thing most likely to cost deploy day an hour:
+
+| | `abetworks-website.onrender.com` | `abetworks-website.vercel.app` |
+| --- | --- | --- |
+| What it is | the **suite site** — products, pricing, compare, benchmarks, customers, developers | the **services site** — Data Analytics, AI, Digital Services, Consultancy (a static HTML site) |
+| Stack | Next.js (`/_next/static/…`) | static HTML, 31 pages |
+| Title | "Abetworks — AI CRM, outreach, agents and automation in one suite" | "Abet Works" |
+| `/llms.txt` | **404** | **404** |
+| `/robots.txt` | allow-list, **no AI block** | **404** |
+| `/sitemap.xml` | 448 URLs — **healthy** (40/40 sampled resolve on the host that serves them) | 52 URLs, 32 of them dead (fixed in the site's PR) |
+| Source repo | **not in either public account** | `coding4vinayak/abetworks-website` (public) |
+
+**Both sites claim `abetworks.in` in their canonical tags**, so only one of them
+can be the apex. The suite site is the one that should be: it is the marketing
+site the fleet's apps and pricing pages point at, and its own `robots.txt` says
+`Host: https://abetworks.in`. The services site stays on its own host (or gets a
+subdomain) — it is a real site with real pages, and it is worth keeping, but it
+is not the apex.
+
+**Why the apex is 520:** `abetworks.in` and `www` are Cloudflare-proxied (the
+A records are Cloudflare's anycast IPs) and the origin behind them does not
+answer — so Cloudflare returns 520. The site itself is fine: the Render host
+serves it, and its sitemap is healthy. Nothing about the site is broken; the
+domain is pointed at nothing.
+
+**The fix:** attach `abetworks.in` and `www` to the **Vercel project of the
+suite site's deployment** — or, if the suite site is the Render service, attach
+the domain there — then purge Cloudflare's cache. Verify:
+
+```bash
+curl -sI https://abetworks.in | head -1                       # 200, not 520
+curl -s  https://abetworks.in/ | grep -o '<title>[^<]*'         # the suite site
+curl -s  https://abetworks.in/sitemap.xml | grep -c '<loc>'     # 448
+```
+
+**The site-side AI pack** (`deploy/site-ai-pack/`) needs the suite site's
+**source repo**, which is not in either public account — that is the one thing
+this runbook cannot do for you. Once the repo is reachable:
+
+```sh
+bash deploy/site-ai-pack/apply.sh <the suite site's repo>   # Next.js path
+```
+
+It installs `/llms.txt` (the suite index — every product, its real price, its
+pages), `/openapi.json` (the AbetAPI contract) and the AI block in
+`robots.txt`, and refuses to install the index on a site that has no
+`/products/<slug>/` pages, because a machine-readable index that names pages
+the site does not have is worse than no index.
+
+**The services site** (the public repo) is already covered: its own PRs carry
+`llms.txt`, `robots.txt`, a rebuilt sitemap, and a share card + structured
+data for every page.
+
 ## 4. DNS (Cloudflare)
 
 Every service domain is already declared in the blueprints; add one CNAME per
@@ -85,7 +140,7 @@ subdomain pointing at its `onrender.com` host, then purge Cloudflare's cache.
 
 | Host | Points at |
 |---|---|
-| `abetworks.in` + `www` | the marketing site — attach the domain in Render first (this is the 5-minute §F1 fix; 520s end when the cache purges) |
+| `abetworks.in` + `www` | **the suite site — the Render service `abetworks-website`** (see §3a: there are two sites, and only this one is the apex) |
 | `hub.abetworks.in` | `abetworks-hub` |
 | `analytics.abetworks.in` · `abetagent.abetworks.in` · `flow.abetworks.in` · `leadgenius.abetworks.in` · `leadworks.abetworks.in` · `connect.abetworks.in` · `api.abetworks.in` | their fleet services |
 | `pdf.abetworks.in` | `aw-abetpdf` (deploys from its own repo + render.yaml) |
@@ -145,7 +200,7 @@ vars, re-run the smoke sweep — then the suite is sellable.
 
 ## 6. Order of operations
 
-1. **§F1 site fix** — 5 minutes, biggest unlock (the site is 520 from stale DNS).
+1. **Put the site back** (§3a) — the apex is pointed at nothing; attach it to the suite site's deployment and purge Cloudflare's cache. Biggest unlock, and the only step that needs a dashboard you have and this repo does not.
 2. **Fleet blueprint import** (§1).
 3. **Hub blueprint import** (§2).
 4. **Stripe** products in test mode (§3) — the import prompts for the IDs.

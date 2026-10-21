@@ -20,6 +20,32 @@ assistant that a third of the site is missing.
 This is fixpack items **F2–F4** from `ai-visibility-fixpack.md` (target:
 BlueRails AI visibility 95/100).
 
+## Which site is this for?
+
+There are **two** sites, and only one of them is the apex domain:
+
+| | `abetworks-website.onrender.com` | `abetworks-website.vercel.app` |
+| --- | --- | --- |
+| What it is | the **suite site** — products, pricing, compare, benchmarks | the **services site** — Data Analytics, AI, Digital Services, Consultancy |
+| Stack | Next.js | static HTML |
+| `/products/<slug>/` pages | **yes** | no |
+| Source repo | not in either public account | `coding4vinayak/abetworks-website` (public) |
+
+Both claim `abetworks.in` in their canonical tags; the **suite site** is the
+one that should have it (its own `robots.txt` says `Host: https://abetworks.in`),
+and it is the one this pack's `files/llms.txt` — the suite index, every
+product with its real price — was written for.
+
+The pack picks the right behaviour per site, so it cannot be applied to the
+wrong one by accident:
+
+- **Next.js with `/products/<slug>/` pages** → the suite index, the OpenAPI
+  contract and the robots AI block.
+- **Next.js without them** → the suite index is **not** installed: it would
+  name pages and prices the site does not have.
+- **A static site** → an index **generated from the site itself**, plus a
+  rebuilt sitemap, the robots AI block and the share layer.
+
 ## The first version of this pack was wrong, and why it matters
 
 It shipped one `llms.txt` for one **assumed** site: a Next.js app whose pages

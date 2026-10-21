@@ -44,7 +44,6 @@
 /services/products/product_consultacy.html | Product: consultancy
 /services/products/product_data_anyalitics.html | Product: data analytics
 /services/products/product_digital.html | Product: digital services
-/services/product/abetworks-bots.html | Abetworks bots
 #
 # Deliberately not listed (each one is a reason, not an oversight):
 #   /starter-page.html                 — a Bootstrap template, not a page
@@ -55,6 +54,10 @@
 #   /services/blog/ai-revolutions.html  — a duplicate of the blog index
 #   /services/blog/blogs.html           — a duplicate of /blogs.html
 #   /services/product/template-best.html— a template
+#   /services/product/abetworks-bots.html
+#                                      — the file is empty (0 bytes): the URL serves a
+#                                        blank page, so linking it would be a link to
+#                                        nothing
 #   /services/products/product_sales_and_marketing .html
 #                                      — the filename carries a space; the URL would
 #                                        need encoding and the page is a duplicate

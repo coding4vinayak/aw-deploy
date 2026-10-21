@@ -868,5 +868,4 @@ for (const m of prMade) {
 }
 await fetch(`${API}/leads/${prLead.id}`, { method: "DELETE", headers: H });
 log(`  cleanup: removed the ${prMade.length} rules this step created and the 1 lead it named.`);
-
 await capture.close();

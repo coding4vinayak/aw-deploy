@@ -635,6 +635,4 @@ for (const d of declaredRuns) {
 await fetch(`${API}/enrichment-rules/${scheduled.body.id}`, { method: "DELETE", headers: H });
 await fetch(`${API}/leads/${cadenceLead.id}`, { method: "DELETE", headers: H });
 log(`  cleanup: removed the ${declaredRuns.length + 1} rules this step created and the ${declaredRuns.length + 1} leads it named.`);
-
-
 await capture.close();

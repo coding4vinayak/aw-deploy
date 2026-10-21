@@ -81,13 +81,53 @@ curl -s https://abetworks.in/sitemap.xml | grep -o '<loc>[^<]*' | sed 's|<loc>||
   | while read -r u; do printf '%s %s\n' "$(curl -s -o /dev/null -w '%{http_code}' "$u")" "$u"; done
 ```
 
+## The share and structured-data layer
+
+The pages had a title and a description and **nothing else**: no Open Graph
+tags at all (so a link to any of them rendered as a bare URL), no JSON-LD
+except one block on the home page, a canonical on about half of them, and no
+description on six. That is the company's public face, and it was invisible to
+every crawler and every assistant.
+
+| Tool | What it does |
+| --- | --- |
+| `site-meta.json` | The manifest: the organization's facts and, per page, its title, description and structured-data type. **The only place a fact is written.** |
+| `page-meta.mjs` | Writes the layer into the pages: canonical, Open Graph, Twitter card and JSON-LD, from the manifest. Idempotent — re-running it changes nothing, and `--check` proves it. |
+| `og-card.mjs` | Generates the 1200x630 share card from the site's own logo, with no image library (PNG in and out on `zlib` alone). |
+| `fixtures/logo.png` | The site's own mark, for the card's test. |
+
+```sh
+# the layer, for a site checkout
+node deploy/site-ai-pack/page-meta.mjs --site <dir> --manifest deploy/site-ai-pack/site-meta.json --write
+# is the site still carrying it?
+node deploy/site-ai-pack/page-meta.mjs --site <dir> --manifest deploy/site-ai-pack/site-meta.json --check
+# the share card, from the site's own logo
+node deploy/site-ai-pack/og-card.mjs <site>/assets/img/logo.png <site>/assets/img/og.png
+```
+
+Two rules the layer holds to: the **Open Graph description *is* the page's
+description** and the title is the page's own title, so the card and the page
+cannot say different things; and the JSON-LD for a page says what the page
+*is* — a `Service` for the service pages, a `BlogPosting` for the articles, an
+`Organization` for the home page — with the address, phone, email, founder and
+social profiles the site states itself.
+
+The share card is composed from the company's own mark. The two photographs in
+the repository were not usable: one is a stock robot handshake, and the other
+is somebody else's office (you can read the name on the ceiling) — and a share
+card that shows another company's office is a lie about who you are.
+
 ## The pack's own tests
 
 ```sh
-node --test deploy/site-ai-pack/site-llms.test.mjs
+node --test deploy/site-ai-pack/*.test.mjs
 ```
 
-They pin the rules that keep the index honest: a manifest page the site does
-not have is an error; the index links exactly the listed pages and the
-sitemap's hosts; the sitemap escapes the `&` in a filename; robots names the
-AI assistants and points at the index. CI runs them on every push.
+They pin the rules that keep the index and the share layer honest: a manifest
+page the site does not have is an error; the index links exactly the listed
+pages and the sitemap's hosts; the sitemap escapes the `&` in a filename;
+robots names the AI assistants and points at the index; the page layer is
+**idempotent** (a second run produces the same bytes, and the old canonical
+and JSON-LD are replaced rather than doubled); the card is the company's own
+mark on the brand's gold; and a PNG written by the encoder reads back as the
+same pixels. CI runs them on every push.

@@ -165,6 +165,19 @@ bash deploy/smoke-test.sh            # is every host up? — status codes
 bash deploy/acceptance/acceptance.sh # does it behave? — gates, 4xx on junk, honest copy
 ```
 
+**And the paths that WRITE** — the first run, the share link, the weekly
+report — are swept separately, with a key, and everything it creates it removes
+again:
+
+```bash
+AW_KEY_ANALYTICS=<key> AW_KEY_AGENT=<key> AW_KEY_CONNECT=<key> \
+  bash deploy/acceptance/acceptance-writes.sh
+```
+
+`acceptance.sh` stays read-only (no secrets, no writes) so it can be pointed at
+production at any moment; this one needs a key because those features are
+writes. An app with no key is **skipped, honestly** — not failed.
+
 **Grade:** every DB app's `/api/health` returns `{"ok":true,"db":"up"}` (the
 hub answers `storage:"writable"`, pdf its tool count). A **503** means
 DB/migrations — or, for the hub/pdf, storage — are wrong, and because the

@@ -204,11 +204,16 @@ const openLeads = await (await fetch(`${API}/leads?status=NEW&limit=100`, { head
 const openCount = openLeads.total ?? (openLeads.items ?? []).length;
 log(`  a rule that declares nothing reaches every NEW lead in the workspace: ${openCount} right now`);
 
-const rulePost = async (conditions, providers = ["apollo"]) => {
+// The third argument is what the rule says it does — `EnrichmentRule.actions`, required at
+// the door and read by nothing until STEP 13. The reach checks below do not care which
+// columns a rule asks for, so they declare the two they would want; the visit in STEP 10
+// declares the one it is there to fill, because from this round the declaration is the
+// difference between writing it and writing nothing.
+const rulePost = async (conditions, providers = ["apollo"], actions = { fields: ["companySize", "industry"] }) => {
   const r = await fetch(`${API}/enrichment-rules`, {
     method: "POST",
     headers: H,
-    body: JSON.stringify({ name: `leadworks-${RUN}`, trigger: "MANUAL", conditions, actions: { enrich: ["companySize", "industry"] }, providers }),
+    body: JSON.stringify({ name: `leadworks-${RUN}`, trigger: "MANUAL", conditions, actions, providers }),
   });
   return { status: r.status, body: await r.json() };
 };
@@ -276,7 +281,7 @@ for (const row of enrichRows) {
 const wrongProvider = await fetch(`${API}/enrichment-rules`, {
   method: "POST",
   headers: H,
-  body: JSON.stringify({ name: `leadworks-${RUN}`, trigger: "MANUAL", conditions: { tags: [FILL] }, actions: { enrich: ["seniority"] }, providers: ["hubspot"] }),
+  body: JSON.stringify({ name: `leadworks-${RUN}`, trigger: "MANUAL", conditions: { tags: [FILL] }, actions: { fields: ["seniority"] }, providers: ["hubspot"] }),
 });
 const wrongBody = await wrongProvider.json();
 log(`  rule listing hubspot: ${wrongProvider.status}  ${wrongBody.error}`);
@@ -287,7 +292,7 @@ log(`  rule listing Apollo stored providers=${JSON.stringify(foldedRule.body.pro
 check(foldedRule.status === 201 && JSON.stringify(foldedRule.body.providers) === '["apollo"]', 'a name typed the way a sales page spells it is stored in the spelling the worker compares');
 await fetch(`${API}/enrichment-rules/${foldedRule.body.id}`, { method: "DELETE", headers: H });
 
-const enrichRule = await rulePost({ tags: [FILL] }, ["derive"]);
+const enrichRule = await rulePost({ tags: [FILL] }, ["derive"], { fields: ["seniority"] });
 check(enrichRule.status === 201, "rule listing the provider that reads the row is accepted");
 const visit1 = await (await fetch(`${API}/enrichment-rules/${enrichRule.body.id}?action=run`, { method: "POST", headers: H })).json();
 const job1 = await waitJob(visit1.jobId);
@@ -511,5 +516,125 @@ check(blank.score === bornVisit[1].score, `and the number on the row is the one 
 
 for (const id of visitIds) await fetch(`${API}/leads/${id}`, { method: "DELETE", headers: H });
 log(`  cleanup: removed the ${visitIds.length} leads this step created.`);
+
+log("\n═══ STEP 13 — what a rule says to enrich is what it writes, and what it says to run is when ═══");
+// `EnrichmentRule.actions` is required at the create door and commented "What enrichment
+// to perform". Nothing read it. The door that runs a rule handed the worker `fields: []`
+// whatever the rule declared, and the minute sweep handed `shouldRunNow` the whole JSON
+// column as a cron string — the object the door demands coerced to `""`, which matches no
+// clock. Measured against the running app before this round, over leads whose title states
+// a rung: a rule declaring `{ fields: ["industry"] }` and one declaring
+// `{ fields: ["seniority"] }` left exactly the same row (both wrote `seniority=C_LEVEL`,
+// both left the `industry` they had asked about empty, each job carrying `fields: []`), and
+// a `SCHEDULED` rule queued 0 jobs across three sweep minutes while the same rule with a
+// bare `"* * * * *"` written into that column by hand queued one a minute. The door refused
+// the string — `actions must be an object or an array, got a string` — so the one shape
+// that worked was a shape the product would not accept.
+const actRule = async (body) => {
+  const r = await fetch(`${API}/enrichment-rules`, {
+    method: "POST",
+    headers: H,
+    body: JSON.stringify({ name: `leadworks-${RUN}`, trigger: "MANUAL", conditions: { tags: [`act-${RUN}`] }, providers: ["derive"], ...body }),
+  });
+  return { status: r.status, body: await r.json() };
+};
+
+log("  the door now refuses a declaration this build cannot perform:");
+for (const [label, body] of [
+  ["a key nothing performs", { actions: { enrich: ["seniority"] } }],
+  ["a column no visit writes", { actions: { fields: ["zip"] } }],
+  ["an empty field list", { actions: { fields: [] } }],
+  ["a cadence its matcher would never satisfy", { trigger: "SCHEDULED", conditions: { tags: [`act-${RUN}`] }, actions: { schedule: "*/5 * * * *" } }],
+  ["a SCHEDULED rule with no cadence at all", { trigger: "SCHEDULED", conditions: { tags: [`act-${RUN}`] }, actions: { fields: ["seniority"] } }],
+  ["a cadence on a rule nothing sweeps", { actions: { schedule: "0 9 * * 1" } }],
+]) {
+  const refused = await actRule(body);
+  log(`    ${label.padEnd(40)} -> ${refused.status}  ${String(refused.body.error).slice(0, 118)}`);
+  check(refused.status === 400, `the door refuses ${label}`);
+}
+
+const declaredRuns = [];
+for (const [column, who] of [["seniority", "Priya"], ["industry", "Samir"]]) {
+  const tag = `act-${column}-${RUN}`;
+  const born = await (await fetch(`${API}/leads`, {
+    method: "POST",
+    headers: H,
+    body: JSON.stringify({ firstName: who, lastName: "Bearer", email: `${who}.${RUN}.${column}@act32.test`, company: "Act Thirtytwo Estates", title: "Chief Operating Officer", location: "Amman", country: "Jordan", tags: [tag] }),
+  })).json();
+  const created = await actRule({ conditions: { tags: [tag] }, actions: { fields: [column] } });
+  check(created.status === 201, `a rule asking only for ${column} is accepted`);
+  const started = await (await fetch(`${API}/enrichment-rules/${created.body.id}?action=run`, { method: "POST", headers: H })).json();
+  const job = await waitJob(started.jobId);
+  const after = await (await fetch(`${API}/leads/${born.id}`, { headers: H })).json();
+  const seen = await (await fetch(`${API}/enrichment-rules/${created.body.id}`, { headers: H })).json();
+  const logRow = (seen.logs ?? []).find((g) => g.leadId === born.id) ?? {};
+  declaredRuns.push({ column, born, after, job, logRow, ruleId: created.body.id, leadId: born.id, stored: created.body.actions });
+  log(`  a rule declaring fields: ["${column}"] over "Chief Operating Officer":`);
+  log(`    job ${job.status} processed=${job.processedItems}  config carried fields=${JSON.stringify(job.config?.fields)}  actions stored=${JSON.stringify(created.body.actions)}`);
+  log(`    the row: seniority=${after.seniority ?? "nothing"}  industry=${after.industry ?? "nothing"}  status=${after.status}  score ${born.score} -> ${after.score}  lastEnrichedAt=${after.lastEnrichedAt ? "stamped" : "never"}`);
+  log(`    the log: ${logRow.status} fieldsEnriched=${JSON.stringify(logRow.fieldsEnriched)}`);
+}
+const asked = declaredRuns.find((d) => d.column === "seniority");
+const declined = declaredRuns.find((d) => d.column === "industry");
+check(JSON.stringify(asked.job.config?.fields) === '["seniority"]', "the job carries the list the rule declared — that is the door copying it, not the worker guessing");
+check(asked.after.seniority === "C_LEVEL" && asked.after.status === "ENRICHED" && asked.logRow.status === "SUCCESS", "the rule that asked for the rung got it written");
+check(asked.after.score === asked.born.score + 6, `its score followed the column it filled: ${asked.born.score} -> ${asked.after.score}`);
+check(declined.after.seniority === null && declined.after.industry === null, "the rule that asked for `industry` wrote no seniority: a provider's other opinion is not taken");
+check(declined.logRow.status === "PARTIAL" && (declined.logRow.fieldsEnriched ?? ["x"]).length === 0, "and the log says PARTIAL with nothing in it, not SUCCESS");
+check(declined.after.lastEnrichedAt !== null && declined.after.score === declined.born.score, "the visit is still recorded as a visit: stamped, and the number on the row untouched");
+check(declined.after.status === "NEW", `and no status an enrichment did not earn (${declined.after.status})`);
+
+// The cadence, which is the other half of the same column. A SCHEDULED rule that states a
+// five-field cron the matcher can read now queues itself, within the minute.
+const cadenceTag = `act-cron-${RUN}`;
+const cadenceLead = await (await fetch(`${API}/leads`, {
+  method: "POST",
+  headers: H,
+  body: JSON.stringify({ firstName: "Ola", lastName: "Farouk", email: `ola.${RUN}@cronproof.test`, company: "Cron Proof Homes", title: "Chief Operating Officer", tags: [cadenceTag] }),
+})).json();
+const scheduled = await actRule({ trigger: "SCHEDULED", conditions: { tags: [cadenceTag] }, actions: { fields: ["seniority"], schedule: "* * * * *" } });
+check(scheduled.status === 201, `a SCHEDULED rule with a cadence the sweep can match is accepted (${scheduled.status})`);
+const since = Date.now();
+let minted = [];
+while (minted.length === 0 && Date.now() - since < 100_000) {
+  const page = await (await fetch(`${API}/jobs?limit=50`, { headers: H })).json();
+  minted = (page.jobs ?? []).filter((j) => j.config?.ruleId === scheduled.body.id);
+  if (minted.length === 0) await new Promise((r) => setTimeout(r, 2000));
+}
+const waited = Math.round((Date.now() - since) / 1000);
+const cadenceJob = minted[0] ? await waitJob(minted[0].id) : { status: "NONE" };
+const cadenceRow = await (await fetch(`${API}/leads/${cadenceLead.id}`, { headers: H })).json();
+log(`  the sweep's own minute: SCHEDULED rule ${scheduled.body.id} actions=${JSON.stringify(scheduled.body.actions)}`);
+log(`    first job after ${waited}s: ${minted.length} queued, ${cadenceJob.status} processed=${cadenceJob.processedItems ?? 0} fields=${JSON.stringify(cadenceJob.config?.fields)}`);
+log(`    the lead it reached: seniority=${cadenceRow.seniority ?? "nothing"}  status=${cadenceRow.status}  lastEnrichedAt=${cadenceRow.lastEnrichedAt ? "stamped" : "never"}`);
+check(minted.length > 0 && waited <= 90, `a SCHEDULED rule the door accepted now runs by itself (first job after ${waited}s; it used to queue none at any hour)`);
+check(cadenceJob.status === "COMPLETED" && cadenceJob.processedItems === 1, "the queued job ran, over the crowd the conditions name");
+check(cadenceRow.seniority === "C_LEVEL" && cadenceRow.status === "ENRICHED", "and wrote the column its own actions asked for");
+
+log("  the pairing is checked on the edit door too, against whichever half the request left alone:");
+const demoted = await fetch(`${API}/enrichment-rules/${scheduled.body.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ trigger: "MANUAL" }) });
+const demotedBody = await demoted.json();
+log(`    trigger -> MANUAL, cadence still stored: ${demoted.status}  ${String(demotedBody.error).slice(0, 118)}`);
+check(demoted.status === 400, "a cadence on a rule nothing sweeps is refused on the way in and on the way out");
+const gutted = await fetch(`${API}/enrichment-rules/${scheduled.body.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ actions: { fields: ["seniority"] } }) });
+const guttedBody = await gutted.json();
+log(`    actions without a cadence, on a SCHEDULED rule: ${gutted.status}  ${String(guttedBody.error).slice(0, 118)}`);
+check(gutted.status === 400, "and dropping the cadence from a scheduled rule is the same never-runs row the create door refuses");
+const rescheduled = await (async () => {
+  const r = await fetch(`${API}/enrichment-rules/${scheduled.body.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ actions: { fields: ["seniority"], schedule: " 30  9 * * 1 " } }) });
+  return { status: r.status, body: await r.json() };
+})();
+log(`    a real edit — schedule " 30  9 * * 1 ": ${rescheduled.status}  stored actions=${JSON.stringify(rescheduled.body.actions)}`);
+const kept = rescheduled.body.actions ?? {};
+check(rescheduled.status === 200 && (kept.fields ?? []).join() === "seniority" && kept.schedule === "30 9 * * 1", "and a cadence the matcher can read is accepted, stored in the single-space form it is matched in");
+
+for (const d of declaredRuns) {
+  await fetch(`${API}/enrichment-rules/${d.ruleId}`, { method: "DELETE", headers: H });
+  await fetch(`${API}/leads/${d.leadId}`, { method: "DELETE", headers: H });
+}
+await fetch(`${API}/enrichment-rules/${scheduled.body.id}`, { method: "DELETE", headers: H });
+await fetch(`${API}/leads/${cadenceLead.id}`, { method: "DELETE", headers: H });
+log(`  cleanup: removed the ${declaredRuns.length + 1} rules this step created and the ${declaredRuns.length + 1} leads it named.`);
+
 
 await capture.close();

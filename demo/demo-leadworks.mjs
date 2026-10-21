@@ -947,4 +947,5 @@ if (unstamped16.length) {
 } else {
   log("  no export in this database was finished before this round, so there is no unstamped row to serve here.");
 }
+
 await capture.close();

@@ -869,4 +869,83 @@ for (const m of prMade) {
 await fetch(`${API}/leads/${prLead.id}`, { method: "DELETE", headers: H });
 log(`  cleanup: removed the ${prMade.length} rules this step created and the 1 lead it named.`);
 
+log("\n═══ STEP 16 — how long an export's file answers: the row says, and the door obeys ═══");
+// `Export.expiresAt` has been in the schema since the first migration, every export door
+// has handed it back, and nothing ever filled it: 25 COMPLETED rows with `expiresAt: null`,
+// the oldest four days old and still served, and the only place the word "expired" lived
+// was the 410 for a file the operating system had already reclaimed. Now the write that
+// finishes a file also states how long it lives, and both doors that hand the file out ask
+// that date before they open it. The retention is a knob and the demo boots the app with a
+// short one so the refusal happens inside the run — read it off the environment, do not
+// assume it.
+const retEnv = process.env.EXPORT_RETENTION_MS;
+const retMs = Number(retEnv);
+log(`  EXPORT_RETENTION_MS for this app process: ${retEnv ?? "(unset — the app would use its shipped default of 604800000, seven days)"}`);
+check(retEnv !== undefined && /^\d+$/.test(retEnv) && Number.isFinite(retMs) && retMs > 0,
+  "the run booted the app with a finite retention, so the expiry below is a date this run can wait for");
+
+const exp16res = await fetch(`${API}/exports`, {
+  method: "POST",
+  headers: H,
+  body: JSON.stringify({ format: "CSV", fields: ["email", "company", "title", "status", "score"] }),
+});
+const exp16 = (await exp16res.json()).export;
+log(`  POST /exports -> ${exp16.id}: the row as created carries expiresAt=${JSON.stringify(exp16.expiresAt)}`);
+check(exp16res.status === 201 && exp16.expiresAt === null,
+  "no lifetime on a row that has no file yet — the stamp waits for the moment the worker writes one");
+
+let fin16 = null;
+for (let i = 0; i < 40; i++) {
+  await new Promise((r) => setTimeout(r, 250));
+  const cur = await (await fetch(`${API}/exports/${exp16.id}`, { headers: H })).json();
+  if (["COMPLETED", "FAILED"].includes(cur.status)) { fin16 = cur; break; }
+}
+check(fin16?.status === "COMPLETED", `the export finished (${fin16?.status ?? "still running"})`);
+const born16 = new Date(fin16.completedAt).getTime();
+const dies16 = new Date(fin16.expiresAt).getTime();
+log(`  COMPLETED row: completedAt=${fin16.completedAt}  expiresAt=${fin16.expiresAt}  → ${dies16 - born16} ms of life`);
+log(`                 file=${fin16.filePath}  ${fin16.fileSize} bytes  ${fin16.recordCount} lead rows`);
+check(dies16 - born16 === retMs, "the row's lifetime is exactly the retention this instance applies, stamped at the finish");
+
+const dl16a = await fetch(`${API}/exports/${exp16.id}/download`, { headers: H });
+const dl16abytes = await dl16a.arrayBuffer();
+const url16a = await (await fetch(`${API}/exports/${exp16.id}?action=download`, { method: "POST", headers: H })).json();
+log(`  inside the lifetime: download HTTP ${dl16a.status} (${dl16abytes.byteLength} bytes), ?action=download HTTP ${JSON.stringify(url16a.downloadUrl ?? url16a.error)}`);
+check(dl16a.status === 200 && dl16abytes.byteLength === fin16.fileSize, "the file is served while the row says it should be");
+check(typeof url16a.downloadUrl === "string", "and the URL door hands out the URL while the row says it should");
+
+const remain16 = dies16 - Date.now() + 1200;
+log(`  waiting out the lifetime — ${Math.round(remain16)} ms, then asking again…`);
+await new Promise((r) => setTimeout(r, Math.max(0, remain16)));
+
+const dl16b = await fetch(`${API}/exports/${exp16.id}/download`, { headers: H });
+const dl16bBody = await dl16b.json();
+const url16b = await (await fetch(`${API}/exports/${exp16.id}?action=download`, { method: "POST", headers: H })).json();
+log(`  after it: download HTTP ${dl16b.status}  ${JSON.stringify(dl16bBody.error)}`);
+log(`          ?action=download HTTP ${url16b.downloadUrl ? `200 ${url16b.downloadUrl}` : JSON.stringify(url16b.error)}`);
+check(dl16b.status === 410 && /retired on \S+Z/.test(String(dl16bBody.error)),
+  "the door closes on the row's own date and names it — a policy refusal, not a lost file");
+check(dl16bBody.error !== "export file expired from this server — re-run the export",
+  "and it is a different sentence from the one the missing-file 410 gives, so an operator can tell them apart");
+check(url16b.downloadUrl === undefined && url16b.error === dl16bBody.error,
+  "the URL door refuses the same export with the same words instead of handing over a link that will fail");
+
+const after16 = await (await fetch(`${API}/exports/${exp16.id}`, { headers: H })).json();
+log(`  the row after it: status=${after16.status} filePath=${after16.filePath} fileSize=${after16.fileSize} expiresAt=${after16.expiresAt}`);
+check(after16.status === "COMPLETED" && after16.filePath === fin16.filePath && after16.fileSize === fin16.fileSize,
+  "retiring stops the serving, it does not rewrite the export — this round closes the door; deleting the bytes is the next one");
+
+const page16 = await (await fetch(`${API}/exports?limit=100`, { headers: H })).json();
+const unstamped16 = (page16.exports ?? []).filter((e) => e.status === "COMPLETED" && e.expiresAt === null);
+if (unstamped16.length) {
+  const old16 = unstamped16.sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))[0];
+  const dl16c = await fetch(`${API}/exports/${old16.id}/download`, { headers: H });
+  const dl16cBody = dl16c.status === 200 ? null : await dl16c.json();
+  log(`  an export finished before this round (${old16.id}, ${old16.completedAt}, expiresAt=null): HTTP ${dl16c.status}${dl16cBody ? ` ${JSON.stringify(dl16cBody.error)}` : ""}`);
+  check(dl16c.status === 200 || !/retired/.test(String(dl16cBody?.error)),
+    "null is a lifetime nobody ever promised, not an expiry: rows stamped before this round are still served (the file itself may already be gone, which is the other 410)");
+} else {
+  log("  no export in this database was finished before this round, so there is no unstamped row to serve here.");
+}
+
 await capture.close();

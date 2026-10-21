@@ -725,4 +725,5 @@ for (const p of prov) {
   await fetch(`${API}/leads/${p.lead.id}`, { method: "DELETE", headers: H });
 }
 log(`  cleanup: removed the ${prov.length} rules this step created and the ${prov.length} leads it named.`);
+
 await capture.close();

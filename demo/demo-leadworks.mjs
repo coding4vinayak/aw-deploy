@@ -726,4 +726,147 @@ for (const p of prov) {
 }
 log(`  cleanup: removed the ${prov.length} rules this step created and the ${prov.length} leads it named.`);
 
+
+log("\n═══ STEP 15 — when two rules want the same column in the same minute, the ranking says which one ═══");
+// `EnrichmentRule.priority Int @default(0)` has always been stored, accepted at both rule
+// doors, and handed back to whoever asked. Nothing read it. Measured against the running app
+// before this round: one lead, three SCHEDULED rules over it, each asking `seniority`,
+// created in the order 10, 90, 50 —
+//
+//   * `GET /api/enrichment-rules` returned them as 50, 90, 10: `orderBy: { createdAt:
+//     "desc" }`, the number the operator set in none of it;
+//   * the sweep queued them as 10, 90, 50: its `findMany` carried no `orderBy` at all, so the
+//     order the storage engine handed the rows back in was the order they were applied in;
+//   * and the rule that filled the column was the one queued LAST — `prio=50` logged
+//     `SUCCESS fieldsEnriched=["seniority"] beforeData={"seniority":null}` while `prio=10` and
+//     `prio=90` logged `PARTIAL []` with `beforeData={"seniority":"C_LEVEL"}`. The `enrich`
+//     worker runs at `concurrency: 5`, so three jobs over one lead raced and whichever write
+//     landed first won it, enrichment being additive;
+//   * two sweep minutes later that one lead carried six log rows, each recording
+//     `creditsUsed: 1`, five of the six visits refusals that were guaranteed before any
+//     provider woke up.
+//
+// An `orderBy` alone would not have fixed that: reordering a race still leaves the race to
+// decide the column. What a ranking can decide is who OWNS a column, and that has to be
+// settled before anything is queued. `src/lib/rule-priority.ts` settles it — the rules due in
+// one workspace are walked highest-ranked first, each claims the columns its own
+// `actions.fields` asked for, and a rule left with nothing queues nothing at all: no job, no
+// log row, nothing recorded against `creditsUsed`. This step watches one sweep minute do that
+// over one lead, then edits the number and watches the same minute decide the other way.
+const prTag = `prio-${RUN}`;
+const prLead = await (await fetch(`${API}/leads`, {
+  method: "POST",
+  headers: H,
+  body: JSON.stringify({ firstName: "Rana", lastName: "Ranked", email: `rana.${RUN}@rank.test`, company: "Ranked Estates", title: "Chief Operating Officer", location: "Amman", country: "Jordan", tags: [prTag] }),
+})).json();
+log(`  one lead, title "Chief Operating Officer", seniority nothing yet: ${prLead.id}  score=${prLead.score}`);
+
+log("  the range is enforced where a ranking is stored, at the door that stores it:");
+for (const [label, value] of [["101", 101], ["-1", -1], ["9999999", 9999999], ["\"2\"", "2"], ["1.5", 1.5], ["null", null]]) {
+  const refused = await actRule({ priority: value, actions: { fields: ["seniority"] } });
+  log(`    priority ${label.padEnd(9)} -> ${refused.status}  ${String(refused.body.error).slice(0, 96)}`);
+  check(refused.status === 400 && /priority/.test(String(refused.body.error)), `the create door refuses priority ${label} and names the field`);
+}
+
+// Three rules over the one lead, created in an order that contradicts their ranking: the
+// newest is the weakest, the middle one is the strongest, and the weakest asked for a column
+// the strongest did not.
+const prMade = [];
+for (const [prio, fields] of [[50, ["seniority"]], [90, ["seniority"]], [10, ["seniority", "companySize"]]]) {
+  const made = await actRule({ trigger: "SCHEDULED", priority: prio, conditions: { tags: [prTag] }, actions: { fields, schedule: "* * * * *" } });
+  check(made.status === 201, `a SCHEDULED rule at priority ${prio} asking ${JSON.stringify(fields)} is accepted`);
+  prMade.push({ prio, fields, rule: made.body });
+  log(`    created prio=${prio} asking ${JSON.stringify(fields).padEnd(30)} at ${String(made.body.createdAt).slice(11, 23)}Z  id=${made.body.id}`);
+}
+const byPrio = Object.fromEntries(prMade.map((m) => [m.prio, m]));
+const prIds = prMade.map((m) => m.rule.id);
+
+const listed = await (await fetch(`${API}/enrichment-rules?limit=100`, { headers: H })).json();
+const prMine = (listed.rules ?? []).filter((r) => prIds.includes(r.id));
+log(`  the list door, with ${listed.total} rules in the workspace (page size ${listed.limit}):`);
+log(`    ${prMine.map((r) => `prio=${String(r.priority).padEnd(3)} created=${String(r.createdAt).slice(11, 23)}Z logs=${r._count?.logs ?? "?"}`).join("   ")}`);
+check(prMine.length === 3, "all three rules are on the first page a caller gets");
+check(prMine.map((r) => r.priority).join() === "90,50,10", "the door returns them in the ranking it now reads, not in the creation order it used to quote");
+check(new Date(prMine[1].createdAt) < new Date(prMine[2].createdAt), "and the newest of the three is last: `createdAt` no longer decides what an operator sees first");
+
+const prSince = Date.now();
+let prJobs = [];
+while (Date.now() - prSince < 100_000) {
+  const page = await (await fetch(`${API}/jobs?limit=100`, { headers: H })).json();
+  prJobs = (page.jobs ?? []).filter((j) => prIds.includes(j.config?.ruleId));
+  const owners = new Set(prJobs.map((j) => j.config?.ruleId));
+  if (owners.has(byPrio[90].rule.id) && owners.has(byPrio[10].rule.id)) break;
+  await new Promise((r) => setTimeout(r, 2000));
+}
+const prWaited = Math.round((Date.now() - prSince) / 1000);
+const jobsOf = (prio) => prJobs.filter((j) => j.config?.ruleId === byPrio[prio].rule.id);
+log(`  the sweep minute that followed, ${prWaited}s in: ${prJobs.length} job(s) across the three rules`);
+for (const prio of [90, 50, 10]) {
+  const js = jobsOf(prio);
+  log(`    prio=${String(prio).padEnd(2)} asked ${JSON.stringify(byPrio[prio].fields).padEnd(30)} -> ${js.length === 0 ? "no job" : `job ${js[0].id} config.fields=${JSON.stringify(js[0].config?.fields)}`}`);
+}
+check(jobsOf(90).length > 0 && prWaited <= 90, `the highest-ranked rule queued itself within the minute (${prWaited}s)`);
+check((jobsOf(90)[0]?.config?.fields ?? []).join() === "seniority", "and it carries the whole of what it asked for");
+check((jobsOf(10)[0]?.config?.fields ?? []).join() === "companySize",
+  "the lowest-ranked rule queued the REMAINDER and nothing else: it asked for two columns, and the rule above it owns `seniority` this minute");
+check(jobsOf(50).length === 0, "the middle rule asked only for the column the top rule already owns, so it queued nothing at all");
+
+for (const prio of [90, 10]) for (const j of jobsOf(prio)) await waitJob(j.id);
+const prRow = await (await fetch(`${API}/leads/${prLead.id}`, { headers: H })).json();
+log(`  the lead after that minute: seniority=${prRow.seniority ?? "nothing"}  companySize=${prRow.companySize ?? "nothing"}  status=${prRow.status}  score ${prLead.score} -> ${prRow.score}  lastEnrichedAt=${prRow.lastEnrichedAt ? "stamped" : "never"}`);
+const prLogs = {};
+for (const m of prMade) {
+  const seen = await (await fetch(`${API}/enrichment-rules/${m.rule.id}`, { headers: H })).json();
+  prLogs[m.prio] = (seen.logs ?? []).filter((g) => g.leadId === prLead.id);
+  const g = prLogs[m.prio][0] ?? {};
+  log(`    prio=${String(m.prio).padEnd(2)} ${prLogs[m.prio].length} log row(s): ` + (prLogs[m.prio].length === 0
+    ? "none — no visit happened, so there is nothing for the record to be about"
+    : `${g.status} fieldsEnriched=${JSON.stringify(g.fieldsEnriched)} beforeData=${JSON.stringify(g.beforeData)} afterData=${JSON.stringify(g.afterData)} creditsUsed=${g.creditsUsed}`));
+}
+const won = prLogs[90].find((g) => g.status === "SUCCESS") ?? {};
+check(JSON.stringify([won.status, won.fieldsEnriched, won.beforeData, won.afterData]) === JSON.stringify(["SUCCESS", ["seniority"], { seniority: null }, { seniority: "C_LEVEL" }]),
+  "the column went to the rule the ranking put first, and #33's record shows the gap it found there");
+check(prRow.seniority === "C_LEVEL" && prRow.companySize === null,
+  "the row agrees: the rung from the highest-ranked rule, and no company size, because `derive` reads titles, not industries");
+check(prLogs[10].length > 0 && prLogs[10].every((g) => (g.fieldsEnriched ?? ["x"]).length === 0),
+  "the remainder rule visited and wrote nothing — which is the point: its job could not have taken `seniority` even had it run first");
+check(prLogs[50].length === 0, "the starved rule has no log row and no `creditsUsed`: three rules due, two visits made");
+
+// The same minute, decided the other way, because an operator moved the number.
+const badEdit = await fetch(`${API}/enrichment-rules/${byPrio[10].rule.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ priority: 200 }) });
+const badEditBody = await badEdit.json();
+log(`  the edit door, the same table: priority 200 -> ${badEdit.status}  ${String(badEditBody.error).slice(0, 96)}`);
+check(badEdit.status === 400 && /priority/.test(String(badEditBody.error)), "an out-of-range ranking is refused on the way out as well as on the way in");
+const movedAt = new Date();
+const moved = await fetch(`${API}/enrichment-rules/${byPrio[10].rule.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ priority: 95 }) });
+const movedBody = await moved.json();
+log(`    a real edit, prio=10 -> 95: ${moved.status}  stored priority=${movedBody.priority}`);
+check(moved.status === 200 && movedBody.priority === 95, "and a legal one is stored, so the number an operator sets is the number the next sweep reads");
+
+const flippedAt = Date.now();
+let fresh = [];
+while (Date.now() - flippedAt < 100_000) {
+  const page = await (await fetch(`${API}/jobs?limit=100`, { headers: H })).json();
+  fresh = (page.jobs ?? []).filter((j) => prIds.includes(j.config?.ruleId) && new Date(j.createdAt) > movedAt);
+  if (fresh.some((j) => j.config?.ruleId === byPrio[10].rule.id)) break;
+  await new Promise((r) => setTimeout(r, 2000));
+}
+const flipWaited = Math.round((Date.now() - flippedAt) / 1000);
+const freshOf = (prio) => fresh.filter((j) => j.config?.ruleId === byPrio[prio].rule.id);
+log(`  the next sweep minute, ${flipWaited}s in, after one number moved:`);
+for (const prio of [95, 90, 50]) {
+  const js = freshOf(prio === 95 ? 10 : prio);
+  log(`    prio=${String(prio).padEnd(2)} -> ${js.length === 0 ? "no job" : `job ${js[0].id} config.fields=${JSON.stringify(js[0].config?.fields)}`}`);
+}
+check(freshOf(10).length > 0 && (freshOf(10)[0].config?.fields ?? []).join() === "seniority,companySize",
+  "the rule at 95 now owns `seniority` too: it asked for two columns and nothing outranked it for either");
+check(freshOf(90).length === 0 && freshOf(50).length === 0,
+  "and the two rules that asked only for `seniority` are the ones left with nothing — ownership followed the number, both minutes");
+
+for (const m of prMade) {
+  await fetch(`${API}/enrichment-rules/${m.rule.id}`, { method: "DELETE", headers: H });
+}
+await fetch(`${API}/leads/${prLead.id}`, { method: "DELETE", headers: H });
+log(`  cleanup: removed the ${prMade.length} rules this step created and the 1 lead it named.`);
+
 await capture.close();

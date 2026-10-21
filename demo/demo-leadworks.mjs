@@ -11,6 +11,9 @@
 //   8. an enrichment rule's conditions decide which leads the worker visits —
 //      three unspeakable declarations are refused at the door, and four accepted
 //      rules visit exactly the leads they name (2, 2, 0, 0) out of a wider workspace
+//   9. the provider a rule lists is checked against the ones this product calls, and
+//      `derive` writes the seniority a title states: gaps only, never the score, a
+//      value a person typed left alone, and the second run filling nothing
 //
 // Re-runnable: emails/phones carry a per-run suffix so a second run starts clean
 // while the in-run duplicate still collides on purpose.
@@ -190,11 +193,11 @@ const openLeads = await (await fetch(`${API}/leads?status=NEW&limit=100`, { head
 const openCount = openLeads.total ?? (openLeads.items ?? []).length;
 log(`  a rule that declares nothing reaches every NEW lead in the workspace: ${openCount} right now`);
 
-const rulePost = async (conditions) => {
+const rulePost = async (conditions, providers = ["apollo"]) => {
   const r = await fetch(`${API}/enrichment-rules`, {
     method: "POST",
     headers: H,
-    body: JSON.stringify({ name: `leadworks-${RUN}`, trigger: "MANUAL", conditions, actions: { enrich: ["companySize", "industry"] }, providers: ["apollo"] }),
+    body: JSON.stringify({ name: `leadworks-${RUN}`, trigger: "MANUAL", conditions, actions: { enrich: ["companySize", "industry"] }, providers }),
   });
   return { status: r.status, body: await r.json() };
 };
@@ -208,11 +211,11 @@ for (const [label, conditions] of [
   check(refused.status === 400, `the door refuses a rule declaring ${label}`);
 }
 
-// The worker's per-lead counters measure its reach. Every visit currently ends at
-// a provider stub whose write is a placeholder (README names that gap), so a
-// visited lead is counted as failed rather than enriched — what this step holds
-// the product to is which leads the rule puts in front of the worker.
-log(`  the measure is the worker's per-lead counters: reach, not enrichment (the provider stubs are a separate gap)`);
+// The worker's per-lead counters measure its reach: which leads the rule put in
+// front of it. The providers listed here are the call sites a key belongs in, so a
+// visit with `apollo` learns nothing and writes nothing — STEP 10 is where a visit
+// that fills a column is shown. What this step holds the product to is the count.
+log(`  the measure is the worker's per-lead counters: reach (what a visit writes is STEP 10)`);
 const sweep = async (label, conditions, expected) => {
   const created = await rulePost(conditions);
   check(created.status === 201, `rule accepted: ${label}`);
@@ -232,12 +235,93 @@ await sweep("the same tag in caps", { tags: [AIM.toUpperCase()] }, 0);
 log(`  the aimed rule reached 2 of the ${openCount} NEW leads — a declaration narrows, never widens`);
 check(openCount > 2, `2 < ${openCount}: the rule's crowd is smaller than the workspace's`);
 
+log("\n═══ STEP 10 — the enrichment write lands: a title states a seniority ═══");
+// `derive` is the one provider that needs no key: it reads the row the workspace
+// already has. These three arrive the way the buyer's CSV rows do — a title, and
+// nothing under it — and each plays a different part: a gap to fill, a value a
+// person typed that no visit may touch, and a title the table refuses to judge.
+const FILL = `fill-${RUN}`;
+const enrichRows = [
+  { firstName: "Priya", lastName: "Raman", email: `priya.${RUN}@prestigewinds.in`, company: "Prestige Winds", title: "Managing Director", location: "Chennai", country: "India", industry: "Real Estate", tags: [FILL] },
+  { firstName: "Omar", lastName: "Haddad", email: `omar.${RUN}@emaarcapital.ae`, company: "Emaar Capital", title: "Product Manager", seniority: "VP", location: "Dubai", country: "UAE", industry: "Real Estate", tags: [FILL] },
+  { firstName: "Grace", lastName: "Osei", email: `grace.${RUN}@goldcoasthomes.gh`, company: "Gold Coast Homes", title: "Head of Growth", location: "Accra", country: "Ghana", industry: "Real Estate", tags: [FILL] },
+];
+const enrichIds = [];
+const born = [];
+for (const row of enrichRows) {
+  const posted = await (await fetch(`${API}/leads`, { method: "POST", headers: H, body: JSON.stringify(row) })).json();
+  // A score a person chose by hand. The write this round replaces computed the score
+  // from the provider's return value, which for a title-derived seniority is 0.
+  await fetch(`${API}/leads/${posted.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ score: 82 }) });
+  const set = await (await fetch(`${API}/leads/${posted.id}`, { headers: H })).json();
+  enrichIds.push(set.id);
+  born.push(set);
+  log(`  ${row.title.padEnd(18)} arrives: seniority=${set.seniority ?? "nothing"}  score=${set.score}  status=${set.status}  lastEnrichedAt=${set.lastEnrichedAt ?? "never"}`);
+}
+
+// The other half of the rule is now judged too. A name nothing implements used to be
+// stored, read by the worker and answered with silence: the rule sat active and
+// enriched nobody, forever, looking like a quiet week.
+const wrongProvider = await fetch(`${API}/enrichment-rules`, {
+  method: "POST",
+  headers: H,
+  body: JSON.stringify({ name: `leadworks-${RUN}`, trigger: "MANUAL", conditions: { tags: [FILL] }, actions: { enrich: ["seniority"] }, providers: ["hubspot"] }),
+});
+const wrongBody = await wrongProvider.json();
+log(`  rule listing hubspot: ${wrongProvider.status}  ${wrongBody.error}`);
+check(wrongProvider.status === 400 && /"hubspot"/.test(wrongBody.error ?? ""), "the door refuses a provider nothing this product calls, by name");
+
+const foldedRule = await rulePost({ tags: [FILL] }, ["Apollo"]);
+log(`  rule listing Apollo stored providers=${JSON.stringify(foldedRule.body.providers)} (${foldedRule.status})`);
+check(foldedRule.status === 201 && JSON.stringify(foldedRule.body.providers) === '["apollo"]', 'a name typed the way a sales page spells it is stored in the spelling the worker compares');
+await fetch(`${API}/enrichment-rules/${foldedRule.body.id}`, { method: "DELETE", headers: H });
+
+const enrichRule = await rulePost({ tags: [FILL] }, ["derive"]);
+check(enrichRule.status === 201, "rule listing the provider that reads the row is accepted");
+const visit1 = await (await fetch(`${API}/enrichment-rules/${enrichRule.body.id}?action=run`, { method: "POST", headers: H })).json();
+const job1 = await waitJob(visit1.jobId);
+log(`  run 1 — job ${job1.status}: processed=${job1.processedItems}, failed=${job1.failedItems}`);
+check(job1.status === "COMPLETED" && job1.processedItems === 3 && job1.failedItems === 0, "the visit completes: three leads processed, none failed (this threw before the write was fixed)");
+
+const landed = [];
+for (const id of enrichIds) landed.push(await (await fetch(`${API}/leads/${id}`, { headers: H })).json());
+for (const l of landed) log(`  ${l.title.padEnd(18)} now: seniority=${l.seniority ?? "nothing"}  score=${l.score}  status=${l.status}  lastEnrichedAt=${l.lastEnrichedAt ? "stamped" : "never"}`);
+check(landed[0].seniority === "C_LEVEL", "Managing Director states C_LEVEL — and not Director, the word inside it");
+check(landed[0].status === "ENRICHED" && born[0].status === "NEW", "the row is now what the schema's own word for it calls ENRICHED");
+check(landed[0].lastEnrichedAt !== null && born[0].lastEnrichedAt === null, "the stamp of the visit is on the row");
+check(landed[1].seniority === "VP", "the seniority a person typed survives the visit");
+check(landed[2].seniority === null, "Head of Growth is not in the table, so the visit filed nothing — not even UNKNOWN");
+check(landed.every((l) => l.lastEnrichedAt !== null), "all three rows carry the stamp of the visit, including the two it learned nothing from");
+check(landed.every((l, i) => l.score === born[i].score), `the scores the workspace set (${born.map((l) => l.score).join(", ")}) are untouched by enrichment`);
+check(landed[1].status === "NEW" && landed[2].status === "NEW", "no status is earned by a visit that filled no column");
+
+const seen1 = await (await fetch(`${API}/enrichment-rules/${enrichRule.body.id}`, { headers: H })).json();
+const logs1 = seen1.logs ?? [];
+log(`  the rule's own log (${logs1.length} row(s), newest first):`);
+for (const g of logs1) log(`    provider=${g.provider}  status=${String(g.status).padEnd(8)} fields=${JSON.stringify(g.fieldsEnriched)}  workspace=${g.workspaceId || "EMPTY (bad)"}`);
+check(logs1.length === 3, "one log row per visit, on the rule's own page");
+check(logs1.every((g) => g.provider === "derive"), "each row says which provider the visit ran");
+check(logs1.every((g) => g.workspaceId && g.workspaceId === seen1.workspaceId), "every log row names the workspace it happened in (the hardcoded empty string is gone)");
+check(logs1.filter((g) => g.status === "SUCCESS").length === 1, "exactly one of the three visits filled a column");
+check(logs1.filter((g) => g.status === "PARTIAL").length === 2, "the two that filled nothing are logged PARTIAL, not SUCCESS");
+
+const visit2 = await (await fetch(`${API}/enrichment-rules/${enrichRule.body.id}?action=run`, { method: "POST", headers: H })).json();
+const job2 = await waitJob(visit2.jobId);
+const seen2 = await (await fetch(`${API}/enrichment-rules/${enrichRule.body.id}`, { headers: H })).json();
+const logs2 = (seen2.logs ?? []).slice(0, 3);
+log(`  run 2 — job ${job2.status}: processed=${job2.processedItems}, failed=${job2.failedItems}  log: ${logs2.map((g) => `${g.status}/${JSON.stringify(g.fieldsEnriched)}`).join(" ")}`);
+check(job2.processedItems === 3 && job2.failedItems === 0, "the second run reaches the same three leads");
+check(logs2.length === 3 && logs2.every((g) => g.status === "PARTIAL" && (g.fieldsEnriched ?? []).length === 0), "and fills nothing: a visit that lands on a filled column writes no field");
+const stillThere = await (await fetch(`${API}/leads/${enrichIds[0]}`, { headers: H })).json();
+check(stillThere.seniority === "C_LEVEL" && stillThere.status === "ENRICHED", "the value and the status from run 1 are still there");
+
+await fetch(`${API}/enrichment-rules/${enrichRule.body.id}`, { method: "DELETE", headers: H });
 const left = await (await fetch(`${API}/enrichment-rules`, { headers: H })).json();
 check((left.rules ?? []).filter((r) => r.name === `leadworks-${RUN}`).length === 0, "no rule from this run is left behind");
 
 // Hygiene: remove the leads this run created, so re-runs start from the same state.
-const cleanupIds = [...ids, ...importedIds];
+const cleanupIds = [...ids, ...importedIds, ...enrichIds];
 for (const id of cleanupIds) await fetch(`${API}/leads/${id}`, { method: "DELETE", headers: H });
-log(`  cleanup: removed the ${cleanupIds.length} leads this run created (${ids.length} intake + ${importedIds.length} imported).`);
+log(`  cleanup: removed the ${cleanupIds.length} leads this run created (${ids.length} intake + ${importedIds.length} imported + ${enrichIds.length} for the enrichment visit).`);
 
 await capture.close();

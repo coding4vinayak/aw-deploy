@@ -44,6 +44,40 @@ const check = (ok, message) => {
 
 const capture = await startCapture(Number(HOOK_PORT));
 
+// The demo's hygiene, before it measures anything.
+//
+// The ranking gives a column to one rule a minute, and a rule an earlier run
+// left behind still owns the columns it asked for — so the sweep would answer
+// that older rule's question and this run's own rule would wait for ever. The
+// product is right; the demo has to start from a workspace it can measure.
+//
+// The seeded rule is the app's own demo ("Auto-enrich new leads" — it runs on
+// create, and it asks for columns nobody else asks for), so it stays. Every
+// other rule in this workspace is a row a demo run left behind, and it goes.
+{
+  const rules = await (await fetch(`${API}/enrichment-rules?limit=200`, { headers: H })).json();
+  const rows = rules.rules ?? rules.items ?? [];
+  let removed = 0;
+  for (const rule of rows) {
+    if (rule.name === "Auto-enrich new leads") continue;
+    const gone = await fetch(`${API}/enrichment-rules/${rule.id}`, { method: "DELETE", headers: H });
+    if (gone.ok) removed += 1;
+  }
+  log(`  hygiene: removed ${removed} rule(s) an earlier run left behind (${rows.length - removed} kept)`);
+
+  // The same for the sources: a run that was interrupted leaves its rows, and a
+  // source left on a cadence keeps minting scrape jobs for the workspace.
+  const sources = await (await fetch(`${API}/sources?limit=200`, { headers: H })).json();
+  const sourceRows = sources.sources ?? sources.items ?? [];
+  let removedSources = 0;
+  for (const source of sourceRows) {
+    if (source.name === "LinkedIn Scraper") continue;
+    const gone = await fetch(`${API}/sources/${source.id}`, { method: "DELETE", headers: H });
+    if (gone.ok) removedSources += 1;
+  }
+  log(`  hygiene: removed ${removedSources} source(s) an earlier run left behind (${sourceRows.length - removedSources} kept)`);
+}
+
 const leads = [
   { firstName: "Anil", lastName: "Kapoor", email: `anil.${RUN}@kapoorestates.ae`, phone: `+97150${DIG}`, company: "Kapoor Estates", title: "Founder & CEO", seniority: "C_LEVEL", location: "Dubai Marina, Dubai", country: "UAE", industry: "Real Estate", companySize: "11-50", revenue: "$5M-$10M", intentSignals: ["viewed_pricing_3x", "attended_webinar", "asked_valuation"], tags: ["high-intent", "dubai-marina"] },
   { firstName: "Meera", lastName: "Iyer", email: `meera.iyer.${RUN}@prestigegroup.in`, phone: `+9198450${DIG.slice(0, 5)}`, company: "Prestige Group", title: "VP Sales", seniority: "VP", location: "Bengaluru", country: "India", industry: "Real Estate", companySize: "500+", intentSignals: ["downloaded_checklist"], tags: ["investor", "bengaluru"] },
@@ -600,6 +634,15 @@ const cadenceLead = await (await fetch(`${API}/leads`, {
 })).json();
 const scheduled = await actRule({ trigger: "SCHEDULED", conditions: { tags: [cadenceTag] }, actions: { fields: ["seniority"], schedule: "* * * * *" } });
 check(scheduled.status === 201, `a SCHEDULED rule with a cadence the sweep can match is accepted (${scheduled.status})`);
+// The ranking gives a column to one rule a minute, and a rule left behind by an
+// earlier run still owns the columns it asked for. So this rule is given the
+// number that says it comes first — otherwise the sweep would answer an older
+// rule's question and this one would wait for ever, which is the product
+// working exactly as it is meant to and the demo measuring the wrong thing.
+const promoted = await fetch(`${API}/enrichment-rules/${scheduled.body.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ priority: 95 }) });
+const promotedBody = await promoted.json();
+log(`  the rule is given the higher number, so the column it asks for is its own: ${promoted.status} priority=${promotedBody.priority}`);
+check(promoted.status === 200 && promotedBody.priority === 95, "and the ranking reads the number it was given");
 const since = Date.now();
 let minted = [];
 while (minted.length === 0 && Date.now() - since < 100_000) {

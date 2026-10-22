@@ -1522,4 +1522,162 @@ const left20 = psql18(`SELECT count(*) FROM "Source" WHERE id IN ('${ids20.join(
 log(`  cleanup: ${left20 ?? "?"} of this step's rows are left in the Source table`);
 check(left20 === "0", "the step deletes every source it made, including the one the sweep was still on a cadence for");
 
+log("\n═══ STEP 21 — what a finished job says it did, row by row (#40) ═══");
+// The README's API list has read `GET /api/jobs/{id}  # detail + results` since the first
+// commit. Measured at the start of this step, on the table the app was actually running:
+// `JobResult` held 0 rows across 475 jobs — nothing in `src/` had ever written one — every
+// COMPLETED row reported `progress: 100` because the number was typed at the finish line,
+// and 386 of them reported it beside `totalItems: 0`, which is a percentage of nothing.
+const JOBS21 = `${API}/jobs`;
+const q21 = (sql) => psql18(sql, true)?.trim();
+const dbOk21 = q21("SELECT 1") === "1";
+const jobs21Made = [];
+const leads21Made = [];
+
+if (!dbOk21) {
+  log("  psql is unreachable here, so this step reads the app's own doors only.");
+} else {
+  const disagree21 = q21(`SELECT count(*) FROM "Job" WHERE status = 'COMPLETED' AND "totalItems" = 0 AND "processedItems" > 0`);
+  log(`  the table as it stands: ${q21(`SELECT count(*) FROM "JobResult"`)} per-item record(s), ${q21(`SELECT count(*) FROM "Job"`)} jobs, ${disagree21} of them COMPLETED rows whose own counters disagree`);
+
+  const oldId21 = q21(`SELECT id FROM "Job" WHERE status = 'COMPLETED' AND "totalItems" = 0 AND "processedItems" > 0
+    AND NOT EXISTS (SELECT 1 FROM "JobResult" r WHERE r."jobId" = "Job".id) ORDER BY "createdAt" DESC LIMIT 1`);
+  const oldRow21 = await (await fetch(`${JOBS21}/${oldId21}`, { headers: H })).json();
+  log(`  GET /api/jobs/${oldId21} (written before this round) -> stored progress=${oldRow21.progress} totalItems=${oldRow21.totalItems} processedItems=${oldRow21.processedItems}`);
+  log(`     report -> measured=${oldRow21.report?.measured} percent=${oldRow21.report?.percent} problem=${String(oldRow21.report?.problem).slice(0, 110)}`);
+  check(oldRow21.report?.measured === false && oldRow21.report?.percent === 0,
+    "the door does not echo a typed 100 back as a fact: with no denominator the row's percentage is reported as unmeasured");
+  check(/denominator of 0/.test(String(oldRow21.report?.problem)),
+    "and the contradiction is named in the numbers it is made of — rows accounted for against a total of 0");
+  check(oldRow21.report?.results?.recorded === 0, "a job that finished before this round has no per-item record: counted, not backfilled");
+
+  const never21 = q21(`SELECT count(*) FROM "Job" WHERE status = 'CANCELLED'`);
+  const cancelId21 = `demo40cancel${RUN}`;
+  await psql18(`DELETE FROM "Job" WHERE id = '${cancelId21}'`, false);
+  const insertedCancel21 = psql18(`INSERT INTO "Job" (id, "workspaceId", type, status, config, progress, "totalItems", "processedItems", "failedItems", "createdAt", "updatedAt")
+    VALUES ('${cancelId21}', (SELECT id FROM "Workspace" ORDER BY id LIMIT 1), 'VALIDATE', 'CANCELLED', '{"checks":["email_format"]}'::json, 0, 10, 4, 0, now(), now())`, false);
+  if (insertedCancel21 === null) {
+    log("  and the cancel row could not be written here, so the reading of a cancelled job is not checked on this run.");
+  } else {
+    const cancelRow21 = await (await fetch(`${JOBS21}/${cancelId21}`, { headers: H })).json();
+    log(`  ${never21} jobs on this instance have ever been CANCELLED; one written now reads:`);
+    log(`     verdict=${cancelRow21.report?.verdict} note=${String(cancelRow21.report?.verdictNote).slice(0, 150)}`);
+    check(cancelRow21.report?.verdict === "CANCELLED" && /nothing in this application stops a worker/.test(String(cancelRow21.report?.verdictNote)),
+      "a cancelled job says, in the same breath, that 4 rows were already written: `?action=cancel` marks the row and no worker obeys it");
+    await psql18(`DELETE FROM "Job" WHERE id = '${cancelId21}'`, false);
+  }
+}
+
+const mk21 = async (body) => await (await fetch(`${API}/leads`, { method: "POST", headers: H, body: JSON.stringify(body) })).json();
+const kept21 = await mk21({ firstName: "Kept", lastName: "Buyer", email: `kept.${RUN}@buyer-list.test`, company: "Kept Assets", title: "Director of Acquisitions" });
+const gone21 = await mk21({ firstName: "Gone", lastName: "Buyer", email: `gone.${RUN}@buyer-list.test`, company: "Gone Estates", title: "Analyst" });
+const also21 = await mk21({ firstName: "Also", lastName: "Gone", email: `also.${RUN}@buyer-list.test`, company: "Also Estates", title: "Analyst" });
+leads21Made.push(kept21.id);
+
+const val21 = await jobPost("VALIDATE", { checks: ["email_format", "phone_format", "linkedin_format"], action: "flag", leadIds: [kept21.id, gone21.id, also21.id] });
+const valDone21 = await waitJob(val21.id);
+jobs21Made.push(val21.id);
+log(`  VALIDATE over three named leads -> ${valDone21.status} progress=${valDone21.progress} totalItems=${valDone21.totalItems} processedItems=${valDone21.processedItems}`);
+log(`     report -> measured=${valDone21.report?.measured} percent=${valDone21.report?.percent} results=${JSON.stringify(valDone21.report?.results)}`);
+check(valDone21.totalItems === 3 && valDone21.progress === 100 && valDone21.report?.measured === true,
+    "the 100 is arithmetic now: three rows accounted for out of the three the job was named, over a denominator the worker wrote down");
+check(valDone21.report?.results?.recorded === 3 && (valDone21.results ?? []).length === 3,
+    "and `detail + results` has results in it for the first time on this instance: one record per row the job walked");
+const statuses21 = (valDone21.results ?? []).map((r) => r.status);
+check(statuses21.length === 3 && statuses21.every((s) => s === "SUCCESS"),
+    `every lead the validator reached is recorded as reached (${statuses21.join(", ")})`);
+const keptRow21 = await (await fetch(`${API}/leads/${kept21.id}`, { headers: H })).json();
+const keptRecord21 = (valDone21.results ?? []).find((r) => r.leadId === kept21.id);
+const rowFails21 = (keptRow21.validationResults ?? []).filter((r) => !r.valid).map((r) => r.check).sort();
+const recordFails21 = [...(keptRecord21?.data?.failedChecks ?? [])].sort();
+log(`     the kept lead's own row flags [${rowFails21.join(", ")}] and its record names [${recordFails21.join(", ")}]`);
+check(rowFails21.length > 0 && JSON.stringify(rowFails21) === JSON.stringify(recordFails21),
+    "the per-item record and the row it describes say the same thing — which checks a lead failed is in the record, where the job row only says three were processed");
+
+const rm21 = await jobPost("VALIDATE", { checks: ["linkedin_format"], action: "remove", leadIds: [gone21.id, also21.id] });
+const rmDone21 = await waitJob(rm21.id);
+jobs21Made.push(rm21.id);
+const goneRead21 = await fetch(`${API}/leads/${gone21.id}`, { headers: H });
+log(`  VALIDATE action=remove on two leads -> ${rmDone21.status} progress=${rmDone21.progress} recorded=${JSON.stringify(rmDone21.report?.results)}; the removed lead now answers ${goneRead21.status}`);
+check(goneRead21.status === 404, "the rows really are gone");
+const removed21 = (rmDone21.results ?? []).filter((r) => r.data?.action === "remove");
+check(removed21.length === 2 && removed21.every((r) => r.leadId === null),
+    "and their records survive them: `JobResult.leadId` is ON DELETE SET NULL, so two records outlive the leads they describe");
+check(removed21.map((r) => r.data?.removedLeadId).includes(gone21.id) && removed21.map((r) => r.data?.removedLeadId).includes(also21.id),
+    "named in the payload, where the id was written down before the delete ran rather than after it");
+if (dbOk21) {
+  const orphan21 = q21(`SELECT count(*) FROM "JobResult" WHERE "jobId" = '${rm21.id}' AND "leadId" IS NULL`);
+  check(orphan21 === "2", `and the database agrees: ${orphan21} records on that job point at no lead`);
+}
+
+const twin21 = async (who) => await mk21({ firstName: `Twin ${who}`, lastName: "Buyer", email: `twin-${who}.${RUN}@buyer-list.test`, phone: `+971555${DIG}`, company: "Twin Estates", title: "Analyst" });
+const twinA21 = await twin21("a");
+const twinB21 = await twin21("b");
+leads21Made.push(twinA21.id, twinB21.id);
+const dd21 = await jobPost("DEDUPE", { strategy: "phone", action: "flag", keepOldest: true });
+const ddDone21 = await waitJob(dd21.id);
+jobs21Made.push(dd21.id);
+log(`  DEDUPE phone/flag over two leads that share a number -> ${ddDone21.status} progress=${ddDone21.progress} totalItems=${ddDone21.totalItems} processedItems=${ddDone21.processedItems} recorded=${ddDone21.report?.results?.recorded}`);
+check(ddDone21.totalItems === 1 && ddDone21.progress === 100 && ddDone21.report?.measured === true,
+    "one duplicate found, one resolved: the percentage is 1 of 1 by arithmetic, and the row says what it was 100% of");
+const ddRecord21 = (ddDone21.results ?? [])[0];
+check((ddDone21.results ?? []).length === 1 && ddRecord21?.status === "SUCCESS" && ddRecord21?.leadId !== null,
+    "and the duplicate it flagged is one record with the lead still under it — `flag` keeps the row, so the id survives");
+check(ddRecord21?.data?.action === "flag" && [twinA21.id, twinB21.id].includes(String(ddRecord21?.data?.duplicateId))
+    && [twinA21.id, twinB21.id].includes(String(ddRecord21?.data?.mergedIntoMasterId)),
+    `naming what was folded into what: duplicate=${ddRecord21?.data?.duplicateId} master=${ddRecord21?.data?.mergedIntoMasterId}`);
+
+const enrichRead21 = await (await fetch(`${JOBS21}/${visit1.jobId}`, { headers: H })).json();
+const byStatus21 = (job) => ["SUCCESS", "SKIPPED", "FAILED"].map((s) => `${s}=${(job.results ?? []).filter((r) => r.status === s).length}`).join(" ");
+log(`  the STEP 10 visit, re-read: ${enrichRead21.status} progress=${enrichRead21.progress} totalItems=${enrichRead21.totalItems}  ${byStatus21(enrichRead21)}`);
+check(enrichRead21.report?.results?.recorded === 3 && (enrichRead21.results ?? []).filter((r) => r.status === "SUCCESS").length === 1,
+    "the enrichment visit records what it did per lead, and the one lead whose column it filled is the one SUCCESS");
+const skipped21 = (enrichRead21.results ?? []).filter((r) => r.status === "SKIPPED");
+skipped21.forEach((r) => log(`     a visit that landed nothing: ${JSON.stringify(r.data?.reason)}`));
+const explained21 = (r) => {
+  const d = r.data ?? {};
+  if (typeof d.reason !== "string" || d.reason === "") return false;
+  const sets = [...(d.alreadyHeld ?? []), ...(d.refusedForShape ?? []), ...(d.notAColumn ?? [])];
+  if (/named no column at all/.test(d.reason)) return d.answeredColumns === undefined && sets.length === 0;
+  return Array.isArray(d.answeredColumns) && sets.every((c) => d.answeredColumns.includes(c));
+};
+check(skipped21.length === 2 && skipped21.every(explained21),
+    "each visit that wrote nothing names the columns it was answered, and the reason only ever blames columns in that answer");
+check(skipped21.some((r) => [...(r.data?.alreadyHeld ?? []), ...(r.data?.refusedForShape ?? []), ...(r.data?.notAColumn ?? [])].length > 0),
+    "and at least one says which gate it hit — read off the row and the plan's own column set, not from one sentence fitted to every case");
+const secondVisit21 = await (await fetch(JOBS21 + "/" + visit2.jobId, { headers: H })).json();
+log(`  the second visit: ${secondVisit21.status} ${byStatus21(secondVisit21)}`);
+check((secondVisit21.results ?? []).filter((r) => r.status === "SKIPPED").every(explained21)
+    && (secondVisit21.results ?? []).filter((r) => r.status === "SKIPPED").length === 3,
+    "run again over the same crowd and every record is a skip the row explains: the writes are idempotent, and the job says so item by item");
+
+const zeroExp21 = await (await fetch(`${API}/exports`, {
+  method: "POST", headers: H,
+  body: JSON.stringify({ format: "CSV", fields: ["email", "company"], filterJson: { listId: `list-never-created-${RUN}` } }),
+})).json();
+const zeroDone21 = await waitJob(zeroExp21.jobId);
+jobs21Made.push(zeroExp21.jobId);
+log(`  an export whose filter matches nothing -> ${zeroDone21.status} progress=${zeroDone21.progress} totalItems=${zeroDone21.totalItems} measured=${zeroDone21.report?.measured}`);
+log(`     reason: ${String(zeroDone21.report?.reason).slice(0, 120)}`);
+check(zeroDone21.status === "COMPLETED" && zeroDone21.report?.measured === false && zeroDone21.report?.percent === 0,
+    "COMPLETED with nothing to do no longer claims 100% of zero rows; it says there was no denominator");
+check(zeroDone21.report?.verdict === "COMPLETED" && /not measurable from this row/.test(String(zeroDone21.report?.verdictNote)),
+    "and still reports the status the work earned, with the unmeasurable part kept separate from it");
+
+if (dbOk21) {
+  const census21 = q21(`SELECT j."type" || '=' || count(j.id) FROM "Job" j
+    WHERE j.status IN ('COMPLETED','FAILED','CANCELLED') AND NOT EXISTS (SELECT 1 FROM "JobResult" r WHERE r."jobId" = j.id)
+    GROUP BY j."type" ORDER BY j."type"`);
+  log(`  terminal jobs still holding no per-item record, by type: ${String(census21).split("\n").join("  ")}`);
+  log("  EXPORT writes none on purpose (every row its filter matched went into the file, so a record per row repeats the file), and SCRAPE is unreachable here");
+}
+
+for (const id of leads21Made) await fetch(`${API}/leads/${id}`, { method: "DELETE", headers: H });
+for (const id of jobs21Made) await fetch(`${JOBS21}/${id}`, { method: "DELETE", headers: H });
+if (dbOk21) {
+  const left21 = q21(`SELECT count(*) FROM "JobResult" WHERE "jobId" IN ('${jobs21Made.join("','")}')`);
+  log(`  cleanup: ${left21 ?? "?"} per-item records left on this step's ${jobs21Made.length} jobs`);
+  check(left21 === "0", "deleting a job takes its records with it — the cascade the schema promises, checked rather than assumed");
+}
+
 await capture.close();

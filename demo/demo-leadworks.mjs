@@ -1830,4 +1830,132 @@ if (!dbOk22) {
   await fetch(`${API}/webhooks/${sub22.id}`, { method: "DELETE", headers: H });
 }
 
+log("\n═══ STEP 23 — a stopped job can be resumed: the door that marks a row is the door that restarts its crowd (#42) ═══");
+// #41 made `?action=cancel` true — a worker between two rows reads the mark, finishes the row
+// it had started, and stamps CANCELLED with the arithmetic of what it did. The same round's own
+// table then claimed that an operator who stopped a job at row 4 of 200 "restarts it over the
+// rows still standing". The door answered that with `400 "Can only retry failed or completed
+// jobs"`: CANCELLED was not one of the two words the guard accepted, so the stop was honest and
+// irreversible in the same breath. This step is the undoing, on rows this application wrote:
+// the mark taken, the mark resumed, the crowd walked again, and the gate that owns each lead's
+// column deciding what the second walk is allowed to change.
+const q23 = (sql) => psql18(sql, true)?.trim();
+const TERMINAL23 = ["COMPLETED", "FAILED", "CANCELLED"];
+const read23 = (id) => fetch(`${API}/jobs/${id}`, { headers: H }).then((r) => r.json());
+const settle23 = async (id, until, stepMs, maxMs) => {
+  const deadline = Date.now() + maxMs;
+  for (;;) {
+    const j = await read23(id);
+    if (until(j)) return j;
+    if (Date.now() > deadline) return { ...j, timedOutAfterMs: maxMs };
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+};
+const jobs23Made = [];
+
+if (q23("SELECT 1") !== "1") {
+  log("  psql is unreachable here, so this step cannot count the crowd it resumes and is skipped rather than passed.");
+} else {
+  const crowdCsv = ["email,first name,company,title"];
+  for (let i = 0; i < 300; i++) crowdCsv.push(`resume42${i}.${RUN}@crowd.test,Crowd ${i},Resume Estates,Director of Sales ${i}`);
+  const imp23 = await (await fetch(`${API}/leads/import`, { method: "POST", headers: csvHeaders, body: crowdCsv.join("\n") })).json();
+  const crowd23Where = `email LIKE 'resume42%.${RUN}@crowd.test'`;
+  const crowd23 = String(q23(`SELECT id FROM "Lead" WHERE ${crowd23Where} ORDER BY id`) ?? "").split("\n").filter(Boolean);
+  log(`  POST /api/leads/import 300 rows -> imported=${imp23.imported}; the job will walk ${crowd23.length} named ids`);
+  check(imp23.imported === 300 && crowd23.length === 300, "the crowd a resume will re-walk is the crowd the import door wrote");
+
+  const sub23 = await (await fetch(`${API}/webhooks`, {
+    method: "POST", headers: H,
+    body: JSON.stringify({ url: `http://localhost:${HOOK_PORT}/leadworks-resume-${RUN}`, events: ["enrichment.completed"] }),
+  })).json();
+  const deliveries23 = (jobId) => capture.items.filter((h) => h.url.includes(`/leadworks-resume-${RUN}`)
+    && String(JSON.parse(h.body).data?.jobId ?? "") === jobId);
+
+  const stopJob23 = await jobPost("ENRICH", { providers: ["derive"], fields: ["seniority"], leadIds: crowd23 });
+  jobs23Made.push(stopJob23.id);
+  const running23 = await settle23(stopJob23.id, (j) => j.status === "RUNNING" && Number(j.processedItems ?? 0) >= 1, 20, 20000);
+  await fetch(`${API}/jobs/${stopJob23.id}?action=cancel`, { method: "POST", headers: H });
+  const markSnap23 = await settle23(stopJob23.id, (j) => TERMINAL23.includes(j.status), 25, 20000);
+  const accounted23 = (j) => Number(j.processedItems ?? -1) + Number(j.failedItems ?? -1) === (j.report?.results?.recorded ?? -2);
+  const stopped23 = markSnap23.timedOutAfterMs ? markSnap23 : await settle23(stopJob23.id, accounted23, 25, 20000);
+  const did23 = Number(stopped23.processedItems ?? 0), fail23 = Number(stopped23.failedItems ?? 0), all23 = Number(stopped23.totalItems ?? 0);
+  const gap23 = did23 + fail23 - (Number(markSnap23.processedItems ?? 0) + Number(markSnap23.failedItems ?? 0));
+  const touchedByStop23 = Number(q23(`SELECT count(*) FROM "Lead" WHERE ${crowd23Where} AND "lastEnrichedAt" IS NOT NULL`) ?? "-1");
+  log(`  ENRICH over 300 stopped mid-run: ${stopped23.status} ${did23}+${fail23} of ${all23}, progress=${stopped23.progress}%, the stop's two writes ${gap23} row apart, ${touchedByStop23} leads carrying what the first walk wrote`);
+  check(stopped23.status === "CANCELLED" && did23 + fail23 >= 1 && did23 + fail23 < all23 && gap23 >= 0 && gap23 <= 1,
+    `a real stop to resume from: ${did23 + fail23} of ${all23} reached, ${all23 - did23 - fail23} left standing, two writes never further apart than the row in flight`);
+  check(touchedByStop23 === did23 + fail23, "the crowd agrees: one lead written per row the stopped job accounted for");
+
+  // The round, in one request: the same ask #41's door refused with a 400.
+  const retryRes23 = await fetch(`${API}/jobs/${stopJob23.id}?action=retry`, { method: "POST", headers: H });
+  const retry23 = await retryRes23.json();
+  log(`  POST /api/jobs/{id}?action=retry on a CANCELLED row -> ${retryRes23.status} ${JSON.stringify(retry23).slice(0, 60)}`);
+  check(retryRes23.status === 200 && typeof retry23.jobId === "string" && retry23.jobId !== stopJob23.id,
+    "the mark is resumable: a stopped row answers with a new job, not with the 400 that made a stop irreversible");
+  const born23 = await read23(retry23.jobId);
+  jobs23Made.push(retry23.jobId);
+  check(["PENDING", "RUNNING"].includes(born23.status), `and the new row is a job that has to be worked, not the stop copied forward (${born23.status}, not CANCELLED)`);
+  check(JSON.stringify(born23.config) === JSON.stringify(stopped23.config),
+    "it carries the config, which is the crowd: no cursor, no remembered position, the same 300 named leads");
+
+  const done23 = await settle23(retry23.jobId, (j) => TERMINAL23.includes(j.status), 100, 60000);
+  const didAgain23 = Number(done23.processedItems ?? 0), failAgain23 = Number(done23.failedItems ?? 0);
+  const recs23 = Number(done23.report?.results?.recorded ?? -1);
+  log(`  the resume -> ${done23.status} ${didAgain23}+${failAgain23} of ${done23.totalItems}, progress=${done23.progress}%, ${recs23} records`);
+  check(done23.status === "COMPLETED" && done23.progress === 100 && didAgain23 + failAgain23 === all23 && recs23 === all23,
+    `it finished the crowd the stop left: ${didAgain23}+${failAgain23} of ${all23} with one record per row re-walked, progress 100 because the arithmetic says 100`);
+  check(done23.report?.problem === null, "and a row that reached every lead it named reads clean, not as a contradiction");
+
+  const refusedRows23 = Number(q23(`SELECT count(*) FROM "JobResult" WHERE "jobId" = '${retry23.jobId}' AND status = 'SKIPPED' AND data->>'reason' LIKE '%already held%'`) ?? "-1");
+  const wroteRows23 = Number(q23(`SELECT count(*) FROM "JobResult" WHERE "jobId" = '${retry23.jobId}' AND status = 'SUCCESS'`) ?? "-1");
+  const filled23 = Number(q23(`SELECT count(*) FROM "Lead" WHERE ${crowd23Where} AND seniority = 'DIRECTOR'`) ?? "-1");
+  const touched23 = Number(q23(`SELECT count(*) FROM "Lead" WHERE ${crowd23Where} AND "lastEnrichedAt" IS NOT NULL`) ?? "-1");
+  log(`     of its ${recs23} records, ${wroteRows23} wrote a column and ${refusedRows23} were refused by the gate naming the value the row already held; ${filled23}/${all23} leads now hold the seniority`);
+  check(refusedRows23 === touchedByStop23 && wroteRows23 === all23 - touchedByStop23,
+    `the second walk changed exactly what was still standing: ${wroteRows23} leads filled, ${refusedRows23} refused because the first walk had already written them — the gate, not a cursor`);
+  check(filled23 === all23 && touched23 === all23,
+    `and the crowd ends where an uninterrupted job would have left it: ${filled23} of ${all23} written, ${touched23} visited`);
+
+  const afterResume23 = await read23(stopJob23.id);
+  check(afterResume23.status === "CANCELLED" && Number(afterResume23.processedItems) === did23 && afterResume23.completedAt === stopped23.completedAt,
+    "the stopped row is not resurrected by the resume it caused: same mark, same counters, same completedAt");
+
+  await new Promise((r) => setTimeout(r, 800));
+  check(deliveries23(retry23.jobId).length === 1 && deliveries23(stopJob23.id).length === 0,
+    `the wire says which of the two finished: ${deliveries23(retry23.jobId).length} enrichment.completed for the resume, ${deliveries23(stopJob23.id).length} for the stop that never completed`);
+
+  const otherStop23 = await fetch(`${API}/jobs/${stopJob23.id}?action=cancel`, { method: "POST", headers: H });
+  check(otherStop23.status === 400, "the two guards are still two: a row already marked cannot be cancelled again, and this is the answer #42 did not change");
+
+  // The other half of the guard — a row a worker still holds is not a stop, and resuming it
+  // would put a second runner over the same leads. Both in-flight words answer 409, so this
+  // is the check whichever side of the queue boundary the read lands on.
+  const live23 = await jobPost("ENRICH", { providers: ["derive"], fields: ["seniority"], leadIds: crowd23 });
+  jobs23Made.push(live23.id);
+  const liveRead23 = await settle23(live23.id, (j) => j.status === "RUNNING" && Number(j.processedItems ?? 0) >= 1, 20, 20000);
+  const refused23 = await fetch(`${API}/jobs/${live23.id}?action=retry`, { method: "POST", headers: H });
+  const refusedBody23 = await refused23.json();
+  const stillThere23 = await read23(live23.id);
+  log(`  POST ?action=retry on a row its worker has not put down (found ${liveRead23.status} with ${liveRead23.processedItems}/${liveRead23.totalItems} counted) -> ${refused23.status} ${String(refusedBody23.error).slice(0, 90)}`);
+  check(refused23.status === 409 && typeof refusedBody23.jobId !== "string",
+    "a job that has not stopped yet is refused with 409 and no second row is made — the 400 it used to answer was the wrong verb for a state conflict");
+  check(/walk this crowd twice/.test(String(refusedBody23.error)) && ["PENDING", "RUNNING"].includes(stillThere23.status),
+    "and the message names what the resume would have done, to a row that is still the only one of itself");
+  await fetch(`${API}/jobs/${live23.id}?action=cancel`, { method: "POST", headers: H });
+  await settle23(live23.id, (j) => TERMINAL23.includes(j.status), 50, 30000);
+
+  log("  what a resume is not, printed rather than hidden: it is a second job over the whole crowd, not a continuation. Nothing on this table remembers a position, so the leads the stop already wrote are visited again — and the gate that owns each column refuses to re-write a value the row holds, and records that it did.");
+  log("  left alone, still by name: lib/exporter.ts and lib/scraper.ts do not consult the mark, so they never make a stop for this door to undo; and a row whose worker was mid-lead when the mark landed is written by both walkers once resumed — the second visit is refused, but lastEnrichedAt moves twice.");
+
+  for (const id of jobs23Made) await fetch(`${API}/jobs/${id}`, { method: "DELETE", headers: H });
+  const removed23 = q23(`WITH d AS (DELETE FROM "Lead" WHERE ${crowd23Where} RETURNING id) SELECT count(*) FROM d`);
+  const left23 = q23(`SELECT count(*) FROM "Lead" WHERE ${crowd23Where}`);
+  const recsLeft23 = q23(`SELECT count(*) FROM "JobResult" WHERE "jobId" IN ('${jobs23Made.join("','")}')`);
+  const jobsLeft23 = q23(`SELECT count(*) FROM "Job" WHERE id IN ('${jobs23Made.join("','")}')`);
+  log(`  cleanup: ${removed23} crowd leads deleted, ${jobs23Made.length} jobs deleted through the door`);
+  check(left23 === "0" && recsLeft23 === "0" && jobsLeft23 === "0",
+    `cleanup: ${left23} crowd rows, ${recsLeft23} per-item records and ${jobsLeft23} job rows left from this step`);
+  await fetch(`${API}/webhooks/${sub23.id}`, { method: "DELETE", headers: H });
+}
+
 await capture.close();

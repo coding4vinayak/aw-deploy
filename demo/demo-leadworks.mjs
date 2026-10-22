@@ -637,4 +637,92 @@ await fetch(`${API}/leads/${cadenceLead.id}`, { method: "DELETE", headers: H });
 log(`  cleanup: removed the ${declaredRuns.length + 1} rules this step created and the ${declaredRuns.length + 1} leads it named.`);
 
 
+log("\n═══ STEP 14 — the enrichment log says what the row said, not only what it became ═══");
+// `EnrichmentLog` declares `beforeData Json?` beside `afterData Json?` for exactly this
+// audit, and only one of the two was ever written. Measured against the running app
+// before this round, over leads whose title states a rung, each with one rule listing
+// `derive`: a lead whose `seniority` a rep had typed `VP` — the provider offered
+// `C_LEVEL`, the write plan refused it — and a lead whose rule asked for `industry`, so
+// the `seniority` the provider answered was pruned before the plan saw it, left
+// BYTE-IDENTICAL log rows: `["PARTIAL", [], null, {}]`. One fact means "the row's own
+// word won", the other means "nobody asked for that". The gap that *was* filled carried
+// `beforeData: null` too, so nothing in the record told the three cases apart, and the
+// module this column belongs to claimed "the log row carries what the provider said, so
+// a mismatch is visible". It carried the winners only.
+const provRule = async (tag, fields) => {
+  const r = await fetch(`${API}/enrichment-rules`, {
+    method: "POST",
+    headers: H,
+    body: JSON.stringify({ name: `prov-${RUN}`, trigger: "MANUAL", conditions: { tags: [tag] }, actions: { fields }, providers: ["derive"] }),
+  });
+  return { status: r.status, body: await r.json() };
+};
+const provLead = async (who, tag, seniority, title) => {
+  const body = { firstName: who, lastName: "Recorded", email: `${who}.${RUN}@provenance.test`, company: "Provenance Estates", title, location: "Amman", country: "Jordan", tags: [tag] };
+  if (seniority !== undefined) body.seniority = seniority;
+  return await (await fetch(`${API}/leads`, { method: "POST", headers: H, body: JSON.stringify(body) })).json();
+};
+// The four things one column's provenance can record, over one title.
+const provCases = [
+  ["held", "Chief Operating Officer", "VP", ["seniority"], "the row already said VP"],
+  ["away", "Chief Operating Officer", undefined, ["industry"], "the rule asked for a column derive does not answer"],
+  ["fill", "Chief Operating Officer", undefined, ["seniority"], "the gap the rule asked for"],
+  ["silent", "Head of Growth", undefined, ["seniority"], "the provider read the title and abstained"],
+];
+const prov = [];
+for (const [key, title, seniority, fields, why] of provCases) {
+  const tag = `prov-${key}-${RUN}`;
+  const lead = await provLead(`Rec${key}`, tag, seniority, title);
+  const rule = await provRule(tag, fields);
+  const started = await (await fetch(`${API}/enrichment-rules/${rule.body.id}?action=run`, { method: "POST", headers: H })).json();
+  const job = await waitJob(started.jobId);
+  const row = await (await fetch(`${API}/leads/${lead.id}`, { headers: H })).json();
+  const g = (row.enrichmentLogs ?? [])[0] ?? {};
+  prov.push({ key, lead, rule, row, g, why });
+  log(`  ${key.padEnd(6)} (${why})`);
+  log(`    job ${job.status}  actions=${JSON.stringify(rule.body.actions)}`);
+  log(`    the row now: seniority=${JSON.stringify(row.seniority)}  status=${row.status}  score=${row.score}  stamped=${row.lastEnrichedAt ? "yes" : "no"}`);
+  log(Object.keys(g).length === 0
+    ? "    the log: none — no answer arrived, so there is nothing for the row to have been asked"
+    : `    the log: ${g.status}  fieldsEnriched=${JSON.stringify(g.fieldsEnriched)}  beforeData=${JSON.stringify(g.beforeData)}  afterData=${JSON.stringify(g.afterData)}`);
+}
+const byKey = Object.fromEntries(prov.map((p) => [p.key, p]));
+const answered = prov.filter((p) => p.key !== "silent");
+check(answered.every((p) => "beforeData" in p.g && "afterData" in p.g), "every visit that got an answer carries both halves on the lead's own detail door — the column is stored, not just declared");
+
+// The two PARTIALs that used to be one record.
+const sig = (p) => JSON.stringify([p.g.status, p.g.fieldsEnriched, p.g.afterData]);
+check(byKey.held.g.status === "PARTIAL" && byKey.away.g.status === "PARTIAL" && sig(byKey.held) === sig(byKey.away),
+  "the refusal and the pruned-away answer still agree on status, on the empty write list and on the empty afterData");
+check(JSON.stringify(byKey.held.g.beforeData) === '{"seniority":"VP"}' && Object.keys(byKey.away.g.beforeData ?? {}).length === 0,
+  "and are told apart by `beforeData` alone: the row's own VP, against nothing answered at all");
+check(byKey.held.row.seniority === "VP" && byKey.held.row.status === "NEW",
+  "the typed word survived, and no status was earned that a refused visit did not earn");
+
+check(JSON.stringify(byKey.fill.g.beforeData) === '{"seniority":null}' && JSON.stringify(byKey.fill.g.afterData) === '{"seniority":"C_LEVEL"}' && byKey.fill.g.status === "SUCCESS",
+  "the gap reads as a gap: the row said nothing, the visit says C_LEVEL, and the log carries both");
+check(byKey.fill.row.seniority === "C_LEVEL" && byKey.fill.row.status === "ENRICHED",
+  "and the row moved the way the write plan says it moves");
+
+check(byKey.silent.g.status === "PARTIAL" && Object.keys(byKey.silent.g.beforeData ?? {}).length === 0 && byKey.silent.row.seniority === null && byKey.silent.row.lastEnrichedAt,
+  "a provider that read the title and abstained still records the visit: a stamp, a PARTIAL, and nothing in either half of the audit");
+check(JSON.stringify([byKey.silent.g.status, byKey.silent.g.fieldsEnriched, byKey.silent.g.beforeData]) === JSON.stringify([byKey.away.g.status, byKey.away.g.fieldsEnriched, byKey.away.g.beforeData]),
+  "and the log does not explain *why* — offered-nothing and asked-for-nothing are one record; what separates them is the rule's own `actions`, printed above and stored on the rule, not invented here");
+
+// The visit that changes nothing, seen from the record rather than from the row.
+const refill = await (await fetch(`${API}/enrichment-rules/${byKey.fill.rule.body.id}?action=run`, { method: "POST", headers: H })).json();
+await waitJob(refill.jobId);
+const refilled = await (await fetch(`${API}/leads/${byKey.fill.lead.id}`, { headers: H })).json();
+const second = refilled.enrichmentLogs[0] ?? {};
+log(`  a second run of the same rule: ${second.status}  fieldsEnriched=${JSON.stringify(second.fieldsEnriched)}  beforeData=${JSON.stringify(second.beforeData)}  afterData=${JSON.stringify(second.afterData)}`);
+check(second.status === "PARTIAL" && JSON.stringify(second.beforeData) === '{"seniority":"C_LEVEL"}',
+  "the second visit says what the row already said — enrichment is additive, and now the log can show it");
+check(refilled.enrichmentLogs.length === 2 && JSON.stringify(refilled.enrichmentLogs[1].beforeData) === '{"seniority":null}',
+  "both visits are readable side by side: null where the row was empty, the value where it was not");
+
+for (const p of prov) {
+  await fetch(`${API}/enrichment-rules/${p.rule.body.id}`, { method: "DELETE", headers: H });
+  await fetch(`${API}/leads/${p.lead.id}`, { method: "DELETE", headers: H });
+}
+log(`  cleanup: removed the ${prov.length} rules this step created and the ${prov.length} leads it named.`);
 await capture.close();

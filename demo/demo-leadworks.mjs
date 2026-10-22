@@ -541,12 +541,16 @@ const actRule = async (body) => {
   return { status: r.status, body: await r.json() };
 };
 
+// #38 changed one entry of this list. `*/5 * * * *` used to be refused here because the
+// matcher in `src/lib/scheduler.ts` could not read a step or a range; the shared grammar
+// reads both now, so STEP 19 shows them accepted and this slot holds a cadence that is
+// still unreadable — a sixth field, which no leg of the sweep reads.
 log("  the door now refuses a declaration this build cannot perform:");
 for (const [label, body] of [
   ["a key nothing performs", { actions: { enrich: ["seniority"] } }],
   ["a column no visit writes", { actions: { fields: ["zip"] } }],
   ["an empty field list", { actions: { fields: [] } }],
-  ["a cadence its matcher would never satisfy", { trigger: "SCHEDULED", conditions: { tags: [`act-${RUN}`] }, actions: { schedule: "*/5 * * * *" } }],
+  ["a cadence with a sixth field", { trigger: "SCHEDULED", conditions: { tags: [`act-${RUN}`] }, actions: { schedule: "* * * * * 1" } }],
   ["a SCHEDULED rule with no cadence at all", { trigger: "SCHEDULED", conditions: { tags: [`act-${RUN}`] }, actions: { fields: ["seniority"] } }],
   ["a cadence on a rule nothing sweeps", { actions: { schedule: "0 9 * * 1" } }],
 ]) {
@@ -1189,5 +1193,121 @@ if (runLog18 === null) {
       "the number the sweep prints and the number an independent count of the same directory and the same table produce agree, within the two files another process on this shared database, or one crossing the 60-second line, can move between the two reads");
   }
 }
+
+
+log("\n═══ STEP 19 — a cron that no minute can match is refused, matched, or said out loud ═══");
+// Measured before this round, against the running app. Four sources created in one minute,
+// left for four sweep minutes: `*/5 * * * *` was stored with a 201 and minted **0** jobs, in a
+// window that contained minute :20 and :25; `0 9 * * 1-5` minted **0**; `* * * * * 1` — six
+// fields — was read as its *first five* and minted **4**, one per minute on every day of the
+// week, so the field that was supposed to restrict the scrape to Monday was the one dropped;
+// and the control `* * * * *` minted 4, which is what proves the first three were a deaf sweep
+// rather than a dead one. `POST /api/enrichment-rules` refused all three of the failing strings
+// with a 400 naming the offending part — that refusal lived in `rule-actions.ts`, beside a
+// re-spelled copy of the field table, while the two doors that store a `schedule` column asked
+// for none of it. `lib/cron-schedule.ts` is now the grammar and the matcher in one place, the
+// sweep asks it, and every door that stores a cadence asks the same call before it writes.
+const SRC38 = `${API}/sources`;
+const post38 = async (body) => {
+  const res = await fetch(SRC38, { method: "POST", headers: H, body: JSON.stringify(body) });
+  return { status: res.status, body: await res.json() };
+};
+const mk38 = (name, schedule, config = { url: `http://127.0.0.1:${HOOK_PORT}/scrape-me` }) =>
+  post38({ name, type: "API", config, schedule });
+
+const refused38 = [
+  ["a weekday name", "0 9 * * MON-FRI", '"MON-FRI"', "day of week"],
+  ["the six-field shape that misfired every minute", "* * * * * 1", '"* * * * * 1"', "is 6 fields"],
+  ["a step that never advances", "*/0 * * * *", '"*/0"', "steps by 0"],
+  ["a number outside its field", "61 * * * *", '"61"', "outside 0-59"],
+  ["a Quartz placeholder", "0 0 ? * 1", '"?"', "day of month"],
+  ["a range that runs backwards", "20-5 * * * *", '"20-5"', "runs backwards"],
+];
+const refusals38 = [];
+for (const [what, cron, quoted, field] of refused38) {
+  const r = await mk38(`#38 refuses ${cron}`, cron);
+  refusals38.push(r.body.error ?? "");
+  log(`  POST /api/sources ${JSON.stringify(cron).padEnd(18)} -> ${r.status} ${String(r.body.error).slice(0, 116)}`);
+  check(r.status === 400 && String(r.body.error).includes(quoted) && String(r.body.error).includes(field),
+    `the source door refuses ${what} with the part it refused quoted and the field it belongs to`);
+}
+
+const ruleRefusal38 = await fetch(`${API}/enrichment-rules`, {
+  method: "POST", headers: H,
+  body: JSON.stringify({ name: "#38 rule grammar", trigger: "SCHEDULED", conditions: {}, providers: ["derive"], actions: { fields: ["seniority"], schedule: "0 9 * * MON-FRI" } }),
+});
+const ruleBody38 = await ruleRefusal38.json();
+log(`  the same cadence at the rule door: ${ruleRefusal38.status} ${String(ruleBody38.error).slice(0, 116)}`);
+check(ruleRefusal38.status === 400 && refusals38[0].length > 20 && String(ruleBody38.error).includes(refusals38[0]),
+  "one grammar, two doors: the rule refusal contains the matcher's own sentence verbatim, because both doors imported it rather than paraphrasing it");
+
+const honoured38 = [];
+for (const cron of ["*/5 * * * *", "0 9 * * 1-5", "*/15 9-17 * * 1-5"]) {
+  const r = await fetch(`${API}/enrichment-rules`, {
+    method: "POST", headers: H,
+    body: JSON.stringify({ name: `#38 honours ${cron}`, trigger: "SCHEDULED", conditions: {}, providers: ["derive"], actions: { fields: ["seniority"], schedule: cron } }),
+  });
+  const b = await r.json();
+  log(`  a rule declaring ${JSON.stringify(cron).padEnd(20)} -> ${r.status}`);
+  check(r.status === 201, `${cron} is storable now — #34 refused it on the matcher's behalf, and the matcher has learned it`);
+  if (r.status === 201) honoured38.push(b.id);
+}
+
+const step38 = await mk38("#38 every other minute", "*/2 * * * *");
+log(`  POST /api/sources "*/2 * * * *" -> ${step38.status} ${JSON.stringify(step38.body.schedule ?? step38.body.error)}`);
+check(step38.status === 201, "a step cadence is accepted on the door that was storing unmatchable ones silently");
+const stepId38 = step38.body.id;
+
+const edit38 = await fetch(`${SRC38}/${stepId38}`, { method: "PATCH", headers: H, body: JSON.stringify({ schedule: "0 9 * * SUN" }) });
+const editBody38 = await edit38.json();
+log(`  PATCH the same row to "0 9 * * SUN": ${edit38.status} ${String(editBody38.error).slice(0, 90)}`);
+check(edit38.status === 400, "the edit door refuses what the create door refuses — a cadence cannot be smuggled in on the second write");
+const clear38 = await fetch(`${SRC38}/${stepId38}`, { method: "PATCH", headers: H, body: JSON.stringify({ schedule: null }) });
+check(clear38.status === 200 && (await clear38.json()).schedule === null,
+  "and `null` is still no cadence rather than a cadence to refuse: gating on the string is what keeps a cleared schedule clear");
+await fetch(`${SRC38}/${stepId38}`, { method: "PATCH", headers: H, body: JSON.stringify({ schedule: "*/2 * * * *" }) });
+
+const legacyId38 = "demo38legacy";
+const inserted38 = psql18(`INSERT INTO "Source" (id, "workspaceId", name, type, config, schedule, "isActive", "createdAt", "updatedAt")
+  VALUES ('${legacyId38}', (SELECT id FROM "Workspace" ORDER BY id LIMIT 1), '#38 legacy six-field', 'API', '{}'::json, '* * * * * 1', true, now(), now())`, false);
+if (inserted38 === null) {
+  log("  the legacy row could not be inserted without psql, so the skip line and the step's parity are not checked on this run.");
+} else {
+  const t019 = Date.now();
+  const minutes38 = [];
+  let skipLine38 = null;
+  let legacyJobs38 = "0";
+  while (Date.now() - t019 < 200_000 && (minutes38.length === 0 || skipLine38 === null)) {
+    await new Promise((r) => setTimeout(r, 2000));
+    if (minutes38.length === 0) {
+      const stamps = psql18(`SELECT to_char("createdAt",'MI') FROM "Job" WHERE "sourceId" = '${stepId38}' ORDER BY "createdAt"`, true);
+      if (stamps) minutes38.push(...stamps.split("\n").filter(Boolean));
+    }
+    if (skipLine38 === null) {
+      skipLine38 = (readRunLog() ?? "").split("\n").find((line) => line.includes(`Source ${legacyId38} is active and scheduled, but no minute matches it`)) ?? null;
+    }
+    legacyJobs38 = psql18(`SELECT count(*) FROM "Job" WHERE "sourceId" = '${legacyId38}'`, true)?.trim() ?? "?";
+  }
+  const wait38 = Math.round((Date.now() - t019) / 1000);
+  log(`  after ${wait38}s: the step cadence has minted ${minutes38.length} job(s) at minute${minutes38.length === 1 ? "" : "s"} ${minutes38.join(", ") || "-"}, and the hand-inserted six-field row has minted ${legacyJobs38}`);
+  check(minutes38.length > 0, "a `*/2` source mints a scrape job on this build — it minted none across four sweep minutes on the one this round measured");
+  check(minutes38.length > 0 && minutes38.every((m) => Number(m) % 2 === 0),
+    "and every job landed on an even minute: the step is honoured minute by minute, not merely stored");
+  check(legacyJobs38 === "0", "the row the door would now refuse produced nothing, which is what a cadence no minute matches should do");
+  if (skipLine38 === null) {
+    check(false, "no skip line for the hand-inserted row appeared inside 200s — the sweep is silent about a cadence it cannot read, which is the invisibility this round closes");
+  } else {
+    log(`    ${skipLine38}`);
+    check(/is 6 fields/.test(skipLine38),
+      "a cadence stored before the door refused is named in the stdout with its row's id and the reason no minute matches it");
+  }
+}
+
+const clean38 = await psql18(`DELETE FROM "Job" WHERE "sourceId" IN ('${stepId38}', '${legacyId38}')`, false);
+await psql18(`DELETE FROM "Source" WHERE id IN ('${stepId38}', '${legacyId38}')`, false);
+for (const id of honoured38) await fetch(`${API}/enrichment-rules/${id}`, { method: "DELETE", headers: H });
+const left38 = psql18(`SELECT count(*) FROM "Source" WHERE id IN ('${stepId38}', '${legacyId38}') OR name LIKE '#38 %'`, true)?.trim();
+log(`  cleanup: ${left38 ?? "?"} of this step's rows are left in the Source table${clean38 === null ? " (the deletes were skipped with psql unreachable)" : ""}`);
+check(left38 === "0", "the step leaves no scheduled source behind for the next sweep minute to trip over");
 
 await capture.close();

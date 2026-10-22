@@ -17,6 +17,9 @@
 //  10. the score one arithmetic produces: intake and CSV import compute it from the row,
 //      a number a person types is kept as an override with the row's own total beside it,
 //      and the checks a validation job records price the same 20 every time it runs
+//  11. the button on a lead's own row visits that lead: the id in the URL is the crowd
+//      the worker walks, one stamp lands on one row, and a title the table does not
+//      judge is recorded as a visit that learned nothing
 //
 // Re-runnable: emails/phones carry a per-run suffix so a second run starts clean
 // while the in-run duplicate still collides on purpose.
@@ -446,5 +449,67 @@ check((explained.breakdown?.earned ?? []).length === 15 && explained.breakdown?.
 const cleanupIds = [...ids, ...importedIds, ...enrichIds, ...scoreIds, scoredId];
 for (const id of cleanupIds) await fetch(`${API}/leads/${id}`, { method: "DELETE", headers: H });
 log(`  cleanup: removed the ${cleanupIds.length} leads this run created (${ids.length} intake + ${importedIds.length} imported + ${enrichIds.length} for the enrichment visit + ${scoreIds.length + 1} for the score).`);
+
+log("\n═══ STEP 12 — the button on one lead's row visits one lead ═══");
+// `POST /api/leads/{id}?action=enrich` puts a person's id in its URL. Until this round
+// the job it queued named nobody: the worker selected `where: { workspaceId }` with
+// `take: 1000` and walked the whole list, and the three providers the door listed
+// answer nothing without a key, so the sweep filled no column and left no stamp
+// either. Measured against the running app before the fix, on a workspace holding 20
+// leads: `job COMPLETED: processed=20 failed=0 total=0`, and 0 of the 5 rows that run
+// created carried `lastEnrichedAt` afterwards — the whole list walked for nothing.
+const VISIT = `visit-${RUN}`;
+const visitRows = [
+  { firstName: "Ingrid", lastName: "Halvorsen", email: `ingrid.${RUN}@nordsjell.no`, company: "Nordsjell", title: "Chief Operating Officer", location: "Oslo", country: "Norway", tags: [VISIT] },
+  { firstName: "Kwame", lastName: "Boateng", email: `kwame.${RUN}@goldcoast.test`, company: "Gold Coast Homes", title: "Head of Facilities", location: "Accra", country: "Ghana", tags: [VISIT] },
+  { firstName: "Nalini", lastName: "Rao", email: `nalini.${RUN}@coastal.test`, company: "Coastal Assets", title: "Analyst", location: "Mumbai", country: "India", tags: [VISIT] },
+  { firstName: "Yaa", lastName: "Mensah", email: `yaa.${RUN}@mensah.test`, company: "Mensah Homes", title: "Broker", location: "Kumasi", country: "Ghana", tags: [VISIT] },
+];
+const visitIds = [];
+const bornVisit = [];
+for (const row of visitRows) {
+  const l = await (await fetch(`${API}/leads`, { method: "POST", headers: H, body: JSON.stringify(row) })).json();
+  visitIds.push(l.id);
+  bornVisit.push(l);
+}
+const listBefore = await (await fetch(`${API}/leads?limit=100`, { headers: H })).json();
+const leadsBefore = listBefore.items ?? listBefore.leads ?? listBefore.data ?? [];
+const stampedBefore = leadsBefore.filter((l) => l.lastEnrichedAt !== null).length;
+log(`  four leads arrive; the workspace now holds ${leadsBefore.length}, of which ${stampedBefore} carry a visit stamp`);
+
+const queued = await (await fetch(`${API}/leads/${visitIds[0]}?action=enrich`, { method: "POST", headers: H })).json();
+const visited = await waitJob(queued.jobId);
+const reached = await (await fetch(`${API}/leads/${visitIds[0]}`, { headers: H })).json();
+log(`  POST /api/leads/{id}?action=enrich, one of ${leadsBefore.length} -> job ${visited.status}: processed=${visited.processedItems} failed=${visited.failedItems} total=${visited.totalItems}`);
+log(`    the job row the door wrote: leadIds=${JSON.stringify(visited.config?.leadIds)} providers=${JSON.stringify(visited.config?.providers)}`);
+check(visited.status === "COMPLETED" && visited.processedItems === 1 && visited.totalItems === 1, `one lead named, one lead visited — the workspace held ${leadsBefore.length} rows and ${leadsBefore.length - 1} of them were left alone`);
+check(JSON.stringify(visited.config?.leadIds) === JSON.stringify([visitIds[0]]), "the crowd the worker walked is the id from the URL");
+check(JSON.stringify(visited.config?.providers) === '["derive"]', "and the provider it asked for is the one this build can run without a key");
+check(reached.seniority === "C_LEVEL" && reached.status === "ENRICHED" && reached.lastEnrichedAt !== null, "Chief Operating Officer states C_LEVEL, and the row now says so");
+check(reached.score === bornVisit[0].score + 6, `the score followed the column it filled: ${bornVisit[0].score} -> ${reached.score} (seniority is worth 6)`);
+
+const untouched = [];
+for (const id of visitIds.slice(1)) untouched.push(await (await fetch(`${API}/leads/${id}`, { headers: H })).json());
+log(`  the three leads beside it: ${untouched.map((l) => `${l.seniority ?? "no rung"}/${l.lastEnrichedAt ? "stamped" : "never stamped"}`).join("  ")}`);
+check(untouched.every((l) => l.lastEnrichedAt === null && l.status === "NEW"), "none of them was reached: no stamp, no status, nothing written");
+const listAfter = await (await fetch(`${API}/leads?limit=100`, { headers: H })).json();
+const stampedAfter = (listAfter.items ?? listAfter.leads ?? listAfter.data ?? []).filter((l) => l.lastEnrichedAt !== null).length;
+log(`  stamped rows in the workspace: ${stampedBefore} -> ${stampedAfter}`);
+check(stampedAfter === stampedBefore + 1, `exactly one row in the whole workspace gained the visit's stamp (${stampedBefore} -> ${stampedAfter})`);
+
+// The same button on a title the table refuses to judge: the visit is real, and what it
+// learned is nothing. This is the case the old sweep hid — before the fix the request
+// walked everybody and stamped nobody, so nothing on any row distinguished a visit
+// that found a rung from one that found none.
+const queued2 = await (await fetch(`${API}/leads/${visitIds[1]}?action=enrich`, { method: "POST", headers: H })).json();
+const visited2 = await waitJob(queued2.jobId);
+const blank = await (await fetch(`${API}/leads/${visitIds[1]}`, { headers: H })).json();
+log(`  the same door on "Head of Facilities" -> job ${visited2.status}: processed=${visited2.processedItems}  seniority=${blank.seniority ?? "still nothing"}  status=${blank.status}  lastEnrichedAt=${blank.lastEnrichedAt ? "stamped" : "never"}  score=${blank.score}`);
+check(visited2.processedItems === 1, "again exactly the one row this request named");
+check(blank.seniority === null && blank.status === "NEW" && blank.lastEnrichedAt !== null, "the stamp says it looked; the empty seniority says it invented nothing");
+check(blank.score === bornVisit[1].score, `and the number on the row is the one it arrived with (${bornVisit[1].score})`);
+
+for (const id of visitIds) await fetch(`${API}/leads/${id}`, { method: "DELETE", headers: H });
+log(`  cleanup: removed the ${visitIds.length} leads this step created.`);
 
 await capture.close();

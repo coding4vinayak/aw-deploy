@@ -64,6 +64,48 @@ check_discovery() {
     ok 'robots.txt serves' 'robots.txt → 200 (route-based)'
   fi
   check_sitemap "$base"
+  check_llms_prices "$base"
+}
+
+# Every app's /llms.txt states its prices, and an AI assistant reads that file
+# and quotes it. So a price in the llms.txt that the app's own pricing page
+# does not carry is a price nobody sells — the worst kind of invented price,
+# because it is the one an assistant repeats. This compares the two, live, on
+# the host being deployed.
+check_llms_prices() {
+  local base="${1%/}" llms pricing
+  llms=$(get_body "$base/llms.txt")
+  pricing=$(get_body "$base/pricing")
+  if [ -z "$pricing" ]; then
+    skip 'llms.txt states the prices the pricing page states' "no pricing page to compare"
+    return
+  fi
+  # The product's own price, from the llms.txt's Pricing block — the lines
+  # from "Pricing" to the next blank one. A range (the suite's "$19-$99") is
+  # a claim about the suite rather than about this product, so it is left to
+  # the suite's own index and not compared here.
+  local block stated missing=""
+  block=$(printf '%s\n' "$llms" | awk '/^Pricing/ {printing=1} printing && /^$/ {printing=0} printing')
+  stated=$(printf '%s' "$block" \
+    | sed -E 's/\$[0-9][0-9,]*(\.[0-9]+)?[-–—]\$?[0-9][0-9,]*(\.[0-9]+)?/a range/g' \
+    | grep -oE '\$[0-9][0-9,]*(\.[0-9]+)?' | sort -u)
+  if [ -z "$stated" ]; then
+    skip 'llms.txt states the prices the pricing page states' "the llms.txt names no price"
+    return
+  fi
+  for amount in $stated; do
+    # $19 in the llms.txt is $19 on the page; a comma is a thousands separator
+    # the page may or may not print.
+    if printf '%s' "$pricing" | grep -qF "$amount"; then continue; fi
+    local bare="${amount//,/}"
+    if printf '%s' "$pricing" | grep -qF "$bare"; then continue; fi
+    missing="$missing $amount"
+  done
+  if [ -n "$missing" ]; then
+    bad 'llms.txt states the prices the pricing page states' "not on the pricing page:$missing"
+  else
+    ok 'llms.txt states the prices the pricing page states' "$(printf '%s' "$stated" | tr '\n' ' ')"
+  fi
 }
 
 # Every published app host must tell crawlers where its pages are. A sitemap

@@ -179,15 +179,18 @@ cd aw-leadgenius   && DATABASE_URL='<external connection string>' npm run db:see
 cd aw-abetflow     && DATABASE_URL='<external connection string>' npm run db:seed
 ```
 
-Each seed is idempotent (it leaves an existing demo workspace alone), prints
-what it created, and — where the app has one — the **demo sign-in** the login
-page mentions. AbetConnect's demo is the odd one: it is a *login*, not a public
-workspace, so its seed prints the demo credentials and its front door is the app
-itself; the other four need no account at all.
+Each seed is safe to run twice: most of them notice the demo is already there
+and skip the work, and the two that rebuild it (LeadGenius and AbetConnect)
+rebuild it cleanly rather than stacking duplicates.
+
+Every one of these demos is **public** — a visitor with no account sees the
+seeded rows. AbetConnect's front door *is* the app rather than a marketing
+page, so its demo link sits on the sign-in page instead of the landing page;
+the sweep looks in both places.
 
 The sweep checks the demo is really there, so this cannot be forgotten a
-second time: `acceptance.sh` follows each landing page's own demo link and
-fails if the demo workspace is empty.
+second time: `acceptance.sh` follows each app's own demo link and fails if the
+demo workspace is empty.
 
 ```bash
 bash deploy/smoke-test.sh            # is every host up? — status codes

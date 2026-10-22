@@ -25,6 +25,7 @@
 // while the in-run duplicate still collides on purpose.
 import { startCapture } from "./capture.mjs";
 import crypto from "node:crypto";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 
 const { API_KEY: KEY, APP_BASE = "http://localhost:3300", HOOK_PORT = "3799" } = process.env;
 if (!KEY) throw new Error("API_KEY env var missing (run-demo.sh mints it)");
@@ -933,7 +934,7 @@ check(url16b.downloadUrl === undefined && url16b.error === dl16bBody.error,
 const after16 = await (await fetch(`${API}/exports/${exp16.id}`, { headers: H })).json();
 log(`  the row after it: status=${after16.status} filePath=${after16.filePath} fileSize=${after16.fileSize} expiresAt=${after16.expiresAt}`);
 check(after16.status === "COMPLETED" && after16.filePath === fin16.filePath && after16.fileSize === fin16.fileSize,
-  "retiring stops the serving, it does not rewrite the export — this round closes the door; deleting the bytes is the next one");
+  "retiring stops the serving, it does not rewrite the export — the row keeps naming the file it wrote, which is what STEP 17 can then prove about its bytes");
 
 const page16 = await (await fetch(`${API}/exports?limit=100`, { headers: H })).json();
 const unstamped16 = (page16.exports ?? []).filter((e) => e.status === "COMPLETED" && e.expiresAt === null);
@@ -947,5 +948,93 @@ if (unstamped16.length) {
 } else {
   log("  no export in this database was finished before this round, so there is no unstamped row to serve here.");
 }
+
+log("\n═══ STEP 17 — and the next minute takes the bytes: retired means gone, and the row still names what it wrote ═══");
+// Measured before this round, in the database STEP 16 has just described: 27 COMPLETED rows,
+// 2 of them past their date and BOTH files still on disk byte-exact (4,195 and 957 bytes);
+// 51 `/tmp/export_*` against those rows, so 24 files named by no row at all — the work of
+// `DELETE /api/exports/{id}`, which has always removed the row and left the file; 0 rows whose
+// file was missing, i.e. the missing-file 410 had never fired here; and zero sites in `src/`
+// that had ever deleted anything. A refused door is a policy; the disk was still holding 16
+// leads' contact rows.
+//
+// The purge is `planPurge` — the row's own date first, then the shape the worker can actually
+// produce (`/tmp/export_<digits>.<csv|json|xlsx|pdf>`), and never an unstamped row — and the
+// `unlink` that acts on it is the only one in the application, on the once-a-minute sweep that
+// already queues the day's work. So this step waits for the minute instead of asserting the
+// deletion, and the files that step deliberately does not touch have to still be there when it
+// arrives: the pre-#35 rows' bytes, and the 24 orphans.
+const path17 = fin16.filePath;
+const bytes17 = existsSync(path17) ? statSync(path17).size : null;
+log(`  ${path17}: ${bytes17 ?? "(already gone)"} bytes on disk, ${Math.round((Date.now() - dies16) / 1000)}s after the door closed on it`);
+check(bytes17 === fin16.fileSize,
+  "the export STEP 16 refused is still sitting on the filesystem, byte for byte the size the row claims — #35 closed the door and touched nothing else");
+
+const rows17 = (await (await fetch(`${API}/exports?limit=100`, { headers: H })).json()).exports ?? [];
+const named17 = new Set(rows17.map((r) => r.filePath).filter(Boolean));
+const onDisk17 = readdirSync("/tmp").filter((f) => /^export_\d+\.(csv|json|xlsx|pdf)$/.test(f)).map((f) => `/tmp/${f}`);
+const orphans17 = onDisk17.filter((path) => !named17.has(path));
+const legacy17 = rows17.filter((r) => r.status === "COMPLETED" && r.expiresAt === null && r.filePath && existsSync(r.filePath));
+log(`  before the sweep: ${onDisk17.length} export files in /tmp, ${named17.size} of them named by one of the ${rows17.length} rows read, `
+  + `${orphans17.length} named by none, ${legacy17.length} belonging to a row that was never given a lifetime`);
+
+const t0 = Date.now();
+let waited17 = null;
+log("  waiting for the next sweep minute to reclaim it (the purge rides the once-a-minute schedule)…");
+while (Date.now() - t0 < 100_000) {
+  await new Promise((r) => setTimeout(r, 2000));
+  if (!existsSync(path17)) { waited17 = Date.now() - t0; break; }
+}
+if (waited17 === null) {
+  check(false, `the sweep did not remove ${path17} inside 100s — the purge is not running, or did not judge this row retired`);
+} else {
+  log(`  ${path17} is gone ${Math.round(waited17 / 1000)}s after the sweep started looking — removed on the row's own date, by the minute, not by the door`);
+  check(true, "a retired export's bytes are reclaimed by the schedule that reclaims them, within one sweep of its expiry");
+}
+
+const after17 = await (await fetch(`${API}/exports/${exp16.id}`, { headers: H })).json();
+log(`  the row now: status=${after17.status} filePath=${after17.filePath} fileSize=${after17.fileSize} expiresAt=${after17.expiresAt}`);
+check(after17.status === "COMPLETED" && after17.filePath === path17 && after17.fileSize === fin16.fileSize,
+  "and the row is unchanged: reclaiming bytes does not rewrite the record of an export that happened — the path stays as the audit trail, the date as the reason it is empty");
+
+const dl17 = await fetch(`${API}/exports/${exp16.id}/download`, { headers: H });
+const dl17body = await dl17.json();
+const url17 = await (await fetch(`${API}/exports/${exp16.id}?action=download`, { method: "POST", headers: H })).json();
+log(`  with the file actually gone: download HTTP ${dl17.status} ${JSON.stringify(dl17body.error)}`);
+log(`                            ?action=download HTTP ${JSON.stringify(url17.downloadUrl ?? url17.error)}`);
+check(dl17.status === 410 && dl17body.error === dl16bBody.error,
+  "the door answers the retired sentence, the same words it answered while the file was still there — a purge cannot change what a door says, because the date is asked before the path is");
+check(dl17body.error !== "export file expired from this server — re-run the export",
+  "and it is not the missing-file refusal: a file this app reclaimed is still reported as retired, not as lost");
+check(url17.downloadUrl === undefined && url17.error === dl17body.error, "the URL door agrees, as it did a minute earlier");
+
+const orphansStill17 = orphans17.filter((path) => existsSync(path)).length;
+const legacyStill17 = legacy17.filter((r) => existsSync(r.filePath)).length;
+log(`  after the sweep: ${orphansStill17}/${orphans17.length} files named by no row are still on disk, and ${legacyStill17}/${legacy17.length} pre-#35 rows still have theirs`);
+check(orphansStill17 === orphans17.length,
+  "the orphans are untouched — `DELETE /api/exports/{id}` still deletes the row and leaves the file, which this round counts and does not claim to have fixed");
+if (legacy17.length > 0) {
+  check(legacyStill17 === legacy17.length,
+    "and no row that was never promised a lifetime lost its file: `null` is not an expiry, so it is not a deletion either");
+} else {
+  log("  no pre-#35 row's file is on this disk, so there was nothing here for the sweep to leave alone on that count.");
+}
+
+const runLog = (() => {
+  try { return readFileSync(new URL("./.run-leadworks.log", import.meta.url), "utf8"); } catch { return null; }
+})();
+if (runLog === null) {
+  log("  the app's stdout is not readable from this script, so the sweep's own line is not quoted — the facts above are the proof.");
+} else {
+  const removed17 = (runLog.match(/retired file removed at /g) ?? []).length;
+  log(`  the sweep logged ${removed17} removal${removed17 === 1 ? "" : "s"} this run, including:\n    `
+    + (runLog.split("\n").find((line) => line.includes(`Export ${exp16.id}: retired file removed`)) ?? "(no line naming this export)"));
+  check(runLog.includes(`Export ${exp16.id}: retired file removed at ${path17}`),
+    "the removal is in the log with the row's id, the path it removed and the date that authorized it — which file went and why is answerable from the stdout, not from a guess");
+}
+
+const left17 = readdirSync("/tmp").filter((f) => /^export_\d+\.(csv|json|xlsx|pdf)$/.test(f)).length;
+log(`  /tmp/export_* now holds ${left17} files (${onDisk17.length} before the sweep): the retired ones this app named are gone, the rest stayed.`);
+
 
 await capture.close();

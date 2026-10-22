@@ -1310,4 +1310,173 @@ const left38 = psql18(`SELECT count(*) FROM "Source" WHERE id IN ('${stepId38}',
 log(`  cleanup: ${left38 ?? "?"} of this step's rows are left in the Source table${clean38 === null ? " (the deletes were skipped with psql unreachable)" : ""}`);
 check(left38 === "0", "the step leaves no scheduled source behind for the next sweep minute to trip over");
 
+log("\n═══ STEP 20 — a scrape names the address it will not open and the browser it does not have ═══");
+// Measured against the running app before any of this shipped, in two halves.
+//
+// The policy half: ten targets were offered to `POST /api/sources` — `file:///etc/passwd`,
+// `data:text/html,…`, `javascript:alert(1)`, `about:config`, `http://admin@127.0.0.1:6379/`,
+// `http://169.254.169.254/latest/meta-data/`, `http://localhost:5432/`, a bare `/etc/passwd`,
+// `localhost:6379/dev.db` and `https://example.com/` as the control. **All ten came back 201.**
+// The two that were then run — the public one and `file:///etc/passwd` — failed with the
+// identical message, which is the signature of a check that never ran. `src/lib/egress.ts`
+// had been vending that policy for rounds and the webhook delivery calls it; the scrape path
+// had never once. The app's own guard could not see the gap either, because
+// `tests/unit/egress-sites.test.ts` classifies a callee whose name contains `fetch` and this
+// navigation is `page.goto`.
+//
+// The capability half: this box has playwright as a dependency and no browser — no
+// `postinstall`, no `~/.cache/ms-playwright`. Three sources were run in a row; all three
+// minted a `Job`, all three landed `FAILED`, and all three wrote the same five-line
+// box-drawing banner into `Job.error` and into `Source.lastRunError`, while the door that
+// minted each doomed job answered 200 with a `jobId` and `GET /api/health` said nothing about
+// browsers at all. Nothing said the fact a buyer needs *before* pointing a schedule at a
+// scraper: this instance cannot scrape.
+//
+// `src/lib/scrape-capability.ts` answers both questions in one place — the probe's verdict,
+// the one sentence, the banner recognised back into that sentence, and the address read out of
+// a `config` — and `egress.ts`'s own judgement is called at the two write doors, at the run
+// door that mints the job, and above the navigation in the worker. Two orders are pinned here
+// rather than inherited: policy is asked *before* capability, because a refusal that depends
+// on which box this runs on must not be able to hide one that does not; and the run door
+// refuses with 400 or 503 *before* `prisma.job.create`, so a refusal is not a `PENDING` row.
+//
+// This step runs under `ABET_ALLOW_PRIVATE_TARGETS=1`, which the demo boots the app with, so
+// the internal-address family is deliberately not shown here — the scheme, userinfo and
+// unparseable families are, because `egress.ts` consults those before the override.
+const SRC20 = `${API}/sources`;
+const ids20 = [];
+const mk20 = async (name, config, type = "WEB_SCRAPER", schedule = null) => {
+  const res = await fetch(SRC20, { method: "POST", headers: H, body: JSON.stringify({ name, type, config, schedule }) });
+  const body = await res.json();
+  if (body?.id) ids20.push(body.id);
+  return { status: res.status, body };
+};
+const lastJob20 = async (sourceId, seconds = 90) => {
+  if (psql18("SELECT 1", true) === null) return undefined;
+  const until = Date.now() + seconds * 1000;
+  while (Date.now() < until) {
+    const line = psql18(`SELECT status || '~' || coalesce(error,'') FROM "Job" WHERE "sourceId" = '${sourceId}' ORDER BY "createdAt" DESC LIMIT 1`, true)?.trim();
+    const split = line ? line.indexOf("~") : -1;
+    if (split > 0 && !/^(PENDING|RUNNING)/.test(line)) {
+      return { status: line.slice(0, split), error: line.slice(split + 1) };
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  return undefined;
+};
+
+const refused20 = [
+  ["a file on this box", { url: "file:///etc/passwd", selectors: { email: ".email" } }, "file: is not a scheme"],
+  ["markup handed to the browser as an address", { url: "data:text/html,<h1>lead</h1>" }, "data: is not a scheme"],
+  ["a script where an address belongs", { url: "javascript:alert(1)" }, "javascript: is not a scheme"],
+  ["the browser's own config page", { url: "about:config" }, "about: is not a scheme"],
+  ["the userinfo spoof, which the override does not reach", { url: "http://admin@127.0.0.1:6379/" }, "credentials in it is not an address"],
+  ["a path that is not an address", { url: "/etc/passwd" }, "is not an absolute URL"],
+  ["a host and port with no scheme", { url: "localhost:6379/dev.db" }, "localhost: is not a scheme"],
+];
+for (const [what, config, expected] of refused20) {
+  const r = await mk20(`#39 refuses ${String(config.url).slice(0, 26)}`, config);
+  log(`  POST /api/sources ${JSON.stringify(config.url).padEnd(32)} -> ${r.status} ${String(r.body.error).slice(0, 96)}`);
+  check(r.status === 400 && String(r.body.error).includes(expected),
+    `the create door refuses ${what}, in the egress module's own words (${expected})`);
+}
+const noTarget20 = await mk20("#39 scraper with no address", { selectors: { email: ".lead" } });
+log(`  POST /api/sources with no config.url -> ${noTarget20.status} ${String(noTarget20.body.error).slice(0, 100)}`);
+check(noTarget20.status === 400 && /config\.url/.test(String(noTarget20.body.error)),
+  "and refuses a scraper that names nothing to scrape, instead of storing a promise no run could keep");
+
+const hatchTarget = `http://127.0.0.1:${HOOK_PORT}/scrape-me`;
+const ok20 = await mk20("#39 hatch target", { url: hatchTarget, selectors: { email: ".email" } });
+log(`  POST /api/sources ${JSON.stringify(hatchTarget).padEnd(32)} -> ${ok20.status}`);
+check(ok20.status === 201, "the same door accepts the address this run's own hook server holds, because the runner set the development override");
+const overrideLine20 = (readRunLog() ?? "").split("\n").filter((l) => l.includes("allowed despite internal addresses")).at(-1);
+log(`  ${overrideLine20 ?? "(no override line in stdout)"}`);
+check(Boolean(overrideLine20), "and the override says itself out loud — a hatch that passes quietly is a hole that reads as a policy");
+
+const repoint20 = await fetch(`${SRC20}/${ok20.body.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ config: { url: "file:///etc/shadow" } }) });
+const repointBody20 = await repoint20.json();
+log(`  PATCH that row's config.url to file:///etc/shadow -> ${repoint20.status} ${String(repointBody20.error).slice(0, 90)}`);
+check(repoint20.status === 400, "the edit door refuses the same write the create door refuses: a repoint is a create with an id on it");
+const still20 = await (await fetch(`${SRC20}/${ok20.body.id}`, { headers: H })).json();
+check(String(still20?.config?.url) === hatchTarget, "and the row keeps the address it had — nothing is half-applied and then explained away");
+const strip20 = await fetch(`${SRC20}/${ok20.body.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ config: { selectors: {} } }) });
+const stripBody20 = await strip20.json();
+log(`  PATCH a config with no url onto that WEB_SCRAPER -> ${strip20.status} ${String(stripBody20.error).slice(0, 90)}`);
+check(strip20.status === 400, "and a patch that would leave a scraper with nothing to navigate to is refused too, because the row's type is already the promise");
+const quiet20 = await fetch(`${SRC20}/${ok20.body.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ isActive: false }) });
+log(`  PATCH { isActive: false } — no type, no config -> ${quiet20.status}`);
+check(quiet20.status === 200, "while a patch that names neither still works: the doors refuse writes they can judge, not every write");
+
+const stored20 = `demo39stored${RUN}`;
+const inserted20 = psql18(`INSERT INTO "Source" (id, "workspaceId", name, type, config, schedule, "isActive", "createdAt", "updatedAt")
+  VALUES ('${stored20}', (SELECT id FROM "Workspace" ORDER BY id LIMIT 1), '#39 stored file target', 'WEB_SCRAPER', '{"url":"file:///etc/passwd"}'::json, NULL, true, now(), now())`, false);
+if (inserted20 === null) {
+  log("  psql is unreachable here, so the run door's refusal of an address stored before this round is not checked on this run.");
+} else {
+  ids20.push(stored20);
+  const runStored20 = await fetch(`${SRC20}/${stored20}?action=run`, { method: "POST", headers: H });
+  const runStoredBody20 = await runStored20.json();
+  log(`  POST /api/sources/${stored20}?action=run -> ${runStored20.status} ${String(runStoredBody20.error).slice(0, 96)}`);
+  check(runStored20.status === 400 && String(runStoredBody20.error).includes("file: is not a scheme"),
+    "the run door judges the row it was handed, so an address that was a legal write last week cannot mint a job today");
+  const storedJobs20 = psql18(`SELECT count(*) FROM "Job" WHERE "sourceId" = '${stored20}'`, true)?.trim();
+  check(storedJobs20 === "0", "and the refusal leaves no `Job` row: the door answered no rather than answering yes and failing in a queue");
+}
+
+const cap20 = await mk20("#39 no browser here", { url: hatchTarget, selectors: { email: ".email" } });
+const runCap20 = await fetch(`${SRC20}/${cap20.body.id}?action=run`, { method: "POST", headers: H });
+const runCapBody20 = await runCap20.json();
+log(`  POST ?action=run on an address this run is allowed to reach -> ${runCap20.status} ${JSON.stringify(runCapBody20).slice(0, 150)}`);
+check(runCap20.status === 503
+  ? String(runCapBody20.error).includes("cannot run a scrape") && String(runCapBody20.error).includes("npx playwright install chromium")
+  : Boolean(runCapBody20.jobId),
+  runCap20.status === 503
+    ? "an instance with no browser says so in one sentence, names the command that fixes it, and mints nothing"
+    : "this instance does have a browser, so the door minted the job — the refusal is a fact about the box and is stated as one");
+const capJobs20 = psql18(`SELECT count(*) FROM "Job" WHERE "sourceId" = '${cap20.body.id}'`, true)?.trim();
+check(runCap20.status !== 503 || capJobs20 === "0", "and a refusal at the door is not a `PENDING` row that fails three seconds later");
+
+const raw20 = await fetch(`${API}/jobs`, {
+  method: "POST", headers: H,
+  body: JSON.stringify({ type: "SCRAPE", sourceId: ok20.body.id, config: { url: "file:///etc/passwd", selectors: {} } }),
+});
+const rawBody20 = await raw20.json();
+log(`  POST /api/jobs with the file address in the job's own config -> ${raw20.status} ${String(rawBody20.id ?? rawBody20.error).slice(0, 60)}`);
+check(raw20.status === 201 && Boolean(rawBody20.id),
+  "that door still stores what it is told — its cover is the assertion the worker performs, and the next lines show it firing");
+const sent20 = await lastJob20(ok20.body.id);
+log(`  that Job row -> ${sent20 ? sent20.status : "(no finished row read)"}: ${String(sent20?.error).slice(0, 110)}`);
+check(sent20?.status === "FAILED" && String(sent20.error).includes("file: is not a scheme"),
+  "the worker refuses the address before it opens a wire, in the sentence the doors use");
+check(Boolean(sent20) && !/\u2554|\u2550/.test(String(sent20.error)) && !String(sent20.error).includes("cannot run a scrape"),
+  "no box-drawing banner, and not the capability sentence either: the refusal that does not depend on this box is stated first");
+const rowError20 = psql18(`SELECT "lastRunError" FROM "Source" WHERE id = '${ok20.body.id}'`, true);
+log(`  Source.lastRunError -> ${String(rowError20).trim().slice(0, 110)}`);
+check(rowError20 !== null && String(rowError20).includes("file: is not a scheme"),
+  "and the row's own last-run column reads like a policy decision rather than like a crash");
+
+const every20 = await mk20("#39 every minute", { url: hatchTarget, selectors: { email: ".email" } }, "WEB_SCRAPER", "* * * * *");
+const swept20 = await lastJob20(every20.body.id, 140);
+log(`  the sweep's job for the every-minute row -> ${swept20 ? swept20.status : "(none read within 140s)"}: ${String(swept20?.error).slice(0, 110)}`);
+check(Boolean(swept20), "an active `* * * * *` source still mints its scrape job — this round changed what the job says, not whether the sweep runs");
+check(swept20 !== undefined && !/\u2554|\u2550/.test(String(swept20.error)),
+  "and what it writes into `Job.error` and `Source.lastRunError` is a sentence an operator can act on instead of Playwright's banner");
+
+const health20 = await (await fetch(`${APP_BASE}/api/health`)).json();
+log(`  GET /api/health -> ok=${health20.ok} db=${health20.db} scrape=${JSON.stringify(health20.scrape).slice(0, 160)}`);
+check(health20.ok === true && health20.db === "up", "the health door still answers the way every reader expects — a browser-less instance is not a down one");
+check(typeof health20.scrape?.runnable === "boolean", "and now states the scrape capability as a fact, three jobs before it would have been a surprise");
+check(health20.scrape?.runnable === true || String(health20.scrape?.reason) === String(runCapBody20?.error),
+  health20.scrape?.runnable === true
+    ? "on an instance that can scrape, it says so with the path it would launch"
+    : "and the sentence the health door prints is word for word the one the run door refused with — one fact, one wording");
+
+await fetch(`${SRC20}/${every20.body.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ isActive: false }) });
+await psql18(`DELETE FROM "Job" WHERE "sourceId" IN ('${ids20.join("','")}')`, false);
+await psql18(`DELETE FROM "Job" WHERE "sourceId" IN ('${ids20.join("','")}')`, false);
+for (const id of ids20) await fetch(`${SRC20}/${id}`, { method: "DELETE", headers: H });
+const left20 = psql18(`SELECT count(*) FROM "Source" WHERE id IN ('${ids20.join("','")}') OR name LIKE '#39 %'`, true)?.trim();
+log(`  cleanup: ${left20 ?? "?"} of this step's rows are left in the Source table`);
+check(left20 === "0", "the step deletes every source it made, including the one the sweep was still on a cadence for");
+
 await capture.close();

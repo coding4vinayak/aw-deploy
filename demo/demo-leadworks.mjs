@@ -1552,19 +1552,32 @@ if (!dbOk21) {
   check(oldRow21.report?.results?.recorded === 0, "a job that finished before this round has no per-item record: counted, not backfilled");
 
   const never21 = q21(`SELECT count(*) FROM "Job" WHERE status = 'CANCELLED'`);
-  const cancelId21 = `demo40cancel${RUN}`;
-  await psql18(`DELETE FROM "Job" WHERE id = '${cancelId21}'`, false);
-  const insertedCancel21 = psql18(`INSERT INTO "Job" (id, "workspaceId", type, status, config, progress, "totalItems", "processedItems", "failedItems", "createdAt", "updatedAt")
-    VALUES ('${cancelId21}', (SELECT id FROM "Workspace" ORDER BY id LIMIT 1), 'VALIDATE', 'CANCELLED', '{"checks":["email_format"]}'::json, 0, 10, 4, 0, now(), now())`, false);
-  if (insertedCancel21 === null) {
-    log("  and the cancel row could not be written here, so the reading of a cancelled job is not checked on this run.");
-  } else {
-    const cancelRow21 = await (await fetch(`${JOBS21}/${cancelId21}`, { headers: H })).json();
-    log(`  ${never21} jobs on this instance have ever been CANCELLED; one written now reads:`);
-    log(`     verdict=${cancelRow21.report?.verdict} note=${String(cancelRow21.report?.verdictNote).slice(0, 150)}`);
-    check(cancelRow21.report?.verdict === "CANCELLED" && /nothing in this application stops a worker/.test(String(cancelRow21.report?.verdictNote)),
-      "a cancelled job says, in the same breath, that 4 rows were already written: `?action=cancel` marks the row and no worker obeys it");
-    await psql18(`DELETE FROM "Job" WHERE id = '${cancelId21}'`, false);
+  // Two shapes of a marked row, written here rather than lived, because STEP 22 cannot
+  // schedule a cancel to land in a particular millisecond: 4 of 10 accounted for, and 0 of
+  // 10 reached. Both are read against the counters they carry, and neither is a contradiction.
+  const marks21 = [["demo40cancel" + RUN, 10, 4], ["demo41never" + RUN, 10, 0]];
+  for (const [markId21, total21, done21] of marks21) {
+    await psql18(`DELETE FROM "Job" WHERE id = '${markId21}'`, false);
+    const inserted21 = psql18(`INSERT INTO "Job" (id, "workspaceId", type, status, config, progress, "totalItems", "processedItems", "failedItems", "createdAt", "updatedAt")
+      VALUES ('${markId21}', (SELECT id FROM "Workspace" ORDER BY id LIMIT 1), 'VALIDATE', 'CANCELLED', '{"checks":["email_format"]}'::json, ${Math.round((done21 / total21) * 100)}, ${total21}, ${done21}, 0, now(), now())`, false);
+    if (inserted21 === null) {
+      log("  and the cancel row could not be written here, so the reading of a cancelled job is not checked on this run.");
+      continue;
+    }
+    const cancelRow21 = await (await fetch(`${JOBS21}/${markId21}`, { headers: H })).json();
+    log(`  ${never21} jobs on this instance have ever been CANCELLED; a row carrying ${done21} of ${total21} reads:`);
+    log(`     verdict=${cancelRow21.report?.verdict} note=${String(cancelRow21.report?.verdictNote).slice(0, 170)}`);
+    if (done21 === 0) {
+      check(cancelRow21.report?.verdict === "CANCELLED" && /the mark was read before the worker reached a row/.test(String(cancelRow21.report?.verdictNote))
+        && /10 row\(s\) in its denominator, none visited/.test(String(cancelRow21.report?.verdictNote)),
+        "a mark read before the first row says the crowd it never touched, and does not call the rest of it a failure");
+    } else {
+      check(cancelRow21.report?.verdict === "CANCELLED" && /stopped at the mark with 4 of 10 row\(s\) accounted for/.test(String(cancelRow21.report?.verdictNote))
+        && /6 row\(s\) after it were never reached/.test(String(cancelRow21.report?.verdictNote)),
+        "a marked row is read as a stop with a split — what it accounted for and what it never reached — because `?action=cancel` is obeyed by the worker that reads it");
+    }
+    check(cancelRow21.report?.problem === null, `and ${done21} of ${total21} under a mark is not reported as a contradiction: a stop is the one shape that number is honest in`);
+    await psql18(`DELETE FROM "Job" WHERE id = '${markId21}'`, false);
   }
 }
 
@@ -1678,6 +1691,127 @@ if (dbOk21) {
   const left21 = q21(`SELECT count(*) FROM "JobResult" WHERE "jobId" IN ('${jobs21Made.join("','")}')`);
   log(`  cleanup: ${left21 ?? "?"} per-item records left on this step's ${jobs21Made.length} jobs`);
   check(left21 === "0", "deleting a job takes its records with it — the cascade the schema promises, checked rather than assumed");
+}
+
+log("\n═══ STEP 22 — the mark is obeyed: a cancelled job stops, and says where it stopped (#41) ═══");
+// `?action=cancel` has been in the README's API list since the first commit, and the table's
+// own answer at the start of this round was 475 jobs, 466 COMPLETED and 0 CANCELLED: the door
+// wrote the status and no worker read it back, so a cancelled job ran to a COMPLETED nobody
+// asked for, and no operator could ever make the door work. This step is the mark made real,
+// answered by rows the running application wrote itself: a RUNNING job stopped between two
+// rows, a job still in the queue never begun, and an event that was not sent.
+const q22 = (sql) => psql18(sql, true)?.trim();
+const dbOk22 = q22("SELECT 1") === "1";
+const TERMINAL22 = ["COMPLETED", "FAILED", "CANCELLED"];
+const readJob22 = (id) => fetch(`${API}/jobs/${id}`, { headers: H }).then((r) => r.json());
+const settle22 = async (id, until, stepMs, maxMs) => {
+  const deadline = Date.now() + maxMs;
+  for (;;) {
+    const j = await readJob22(id);
+    if (until(j)) return j;
+    if (Date.now() > deadline) return { ...j, timedOutAfterMs: maxMs };
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+};
+const jobs22Made = [];
+
+if (!dbOk22) {
+  log("  psql is unreachable here, so this step cannot name its crowd and is skipped rather than passed.");
+} else {
+  // A crowd big enough to still be walking when the mark lands, imported through the door a
+  // buyer uses. 300 rows is seconds of work for the enrich worker and nothing to a browser.
+  const crowdCsv = ["email,first name,company,title"];
+  for (let i = 0; i < 300; i++) crowdCsv.push(`stop41${i}.${RUN}@crowd.test,Crowd ${i},Stop Estates,Director of Sales ${i}`);
+  const imp22 = await (await fetch(`${API}/leads/import`, { method: "POST", headers: csvHeaders, body: crowdCsv.join("\n") })).json();
+  const crowd22 = String(q22(`SELECT id FROM "Lead" WHERE email LIKE 'stop41%.${RUN}@crowd.test' ORDER BY id`) ?? "").split("\n").filter(Boolean);
+  log(`  POST /api/leads/import 300 rows -> imported=${imp22.imported}; the job will walk ${crowd22.length} named ids`);
+  check(imp22.imported === 300 && crowd22.length === 300, "the crowd the job is told to walk is the crowd the import door wrote");
+
+  const sub22 = await (await fetch(`${API}/webhooks`, {
+    method: "POST", headers: H,
+    body: JSON.stringify({ url: `http://localhost:${HOOK_PORT}/leadworks-enrich-${RUN}`, events: ["enrichment.completed"] }),
+  })).json();
+  const deliveriesFor22 = (jobId) => capture.items.filter((h) => h.url.includes(`/leadworks-enrich-${RUN}`)
+    && String(JSON.parse(h.body).data?.jobId ?? "") === jobId);
+
+  const stopJob22 = await jobPost("ENRICH", { providers: ["derive"], fields: ["seniority"], leadIds: crowd22 });
+  jobs22Made.push(stopJob22.id);
+  const running22 = await settle22(stopJob22.id, (j) => j.status === "RUNNING" && Number(j.processedItems ?? 0) >= 1, 20, 20000);
+  log(`  ENRICH over 300 leads, read mid-run -> ${running22.status} progress=${running22.progress}% processed=${running22.processedItems}/${running22.totalItems}`);
+  check(running22.status === "RUNNING" && Number(running22.processedItems) >= 1, "the worker was found between rows, with leads already counted");
+  check(running22.report?.measured === true && running22.report?.percent === running22.progress,
+    "a RUNNING row is measurable as it goes: the stamp carries its denominator, so the percentage is read while the job is still walking, not only at the finish line");
+
+  const marked22 = await fetch(`${API}/jobs/${stopJob22.id}?action=cancel`, { method: "POST", headers: H });
+  const stopped22 = await settle22(stopJob22.id, (j) => TERMINAL22.includes(j.status), 25, 20000);
+  const did22 = Number(stopped22.processedItems ?? 0), fail22 = Number(stopped22.failedItems ?? 0), all22 = Number(stopped22.totalItems ?? 0);
+  log(`  POST ?action=cancel -> ${marked22.status}; the row settled as ${stopped22.status} at ${did22}+${fail22} of ${all22}, progress=${stopped22.progress}%`);
+  log(`     verdict=${stopped22.report?.verdict} note=${String(stopped22.report?.verdictNote).slice(0, 190)}`);
+  check(stopped22.status === "CANCELLED", "the worker read the mark and stopped: the row ends on the operator's word, not on a COMPLETED it ran past");
+  check(did22 + fail22 >= 1 && did22 + fail22 < all22, `it stopped between rows — ${did22 + fail22} of ${all22} reached, ${all22 - did22 - fail22} never started`);
+  check(stopped22.progress === Math.round(((did22 + fail22) / all22) * 100) && stopped22.progress < 100,
+    `and its percentage is the arithmetic of those two numbers (${stopped22.progress}), not a typed 100`);
+  check(/stopped at the mark with /.test(String(stopped22.report?.verdictNote))
+    && /never reached/.test(String(stopped22.report?.verdictNote))
+    && /row already in flight is finished/.test(String(stopped22.report?.verdictNote)),
+    "the note says what it accounted for, what it never reached, and the one thing a stop cannot promise");
+  check(stopped22.report?.problem === null, "a denominator with rows still untouched under a mark is not read as a contradiction");
+  check(stopped22.report?.results?.recorded === did22 + fail22 && stopped22.report?.results?.recorded < all22,
+    `one record per row it reached (${stopped22.report?.results?.recorded}), and none for the ${all22 - did22 - fail22} it never saw`);
+  const touched22 = Number(q22(`SELECT count(*) FROM "Lead" WHERE email LIKE 'stop41%.${RUN}@crowd.test' AND "lastEnrichedAt" IS NOT NULL`) ?? "-1");
+  check(touched22 >= 1 && touched22 <= did22 + fail22 && touched22 < all22,
+    `the crowd itself says where it stopped: ${touched22} leads written, ${all22} in the denominator, the rest untouched`);
+
+  await new Promise((r) => setTimeout(r, 800));
+  check(deliveriesFor22(stopJob22.id).length === 0, "and the wire carries no enrichment.completed for a job that did not complete");
+  const ctlIds = [];
+  for (const who of ["ctl-a", "ctl-b", "ctl-c"]) ctlIds.push((await mk21({
+    firstName: "Ctrl " + who, lastName: "Buyer", email: `stop41${who}.${RUN}@crowd.test`, company: "Control Estates", title: "VP of Sales",
+  })).id);
+  const ctl22 = await jobPost("ENRICH", { providers: ["derive"], fields: ["seniority"], leadIds: ctlIds });
+  jobs22Made.push(ctl22.id);
+  const ctlDone22 = await settle22(ctl22.id, (j) => TERMINAL22.includes(j.status), 100, 20000);
+  check(ctlDone22.status === "COMPLETED" && ctlDone22.progress === 100 && deliveriesFor22(ctl22.id).length === 1,
+    `a job that did finish still announces it: one delivery for the control job while the stopped one had none (so the silence above means the stop, not a dead subscription)`);
+
+  // The other half of the mark: a row cancelled while it waits in the queue. The dedupe
+  // worker holds one slot, so a sweep started here keeps the next job un-started for as long
+  // as it takes — which is the only way to make "before the worker began" a fact rather than
+  // a race.
+  const twinCsv = ["email,first name,phone"];
+  for (let i = 0; i < 200; i++) {
+    const tel = "+1555000" + String(i).padStart(4, "0");
+    twinCsv.push(`twin41a${i}.${RUN}@crowd.test,Twin A ${i},${tel}`);
+    twinCsv.push(`twin41b${i}.${RUN}@crowd.test,Twin B ${i},${tel}`);
+  }
+  const impTwins22 = await (await fetch(`${API}/leads/import`, { method: "POST", headers: csvHeaders, body: twinCsv.join("\n") })).json();
+  const busy22 = await jobPost("DEDUPE", { strategy: "phone", action: "flag", keepOldest: true });
+  jobs22Made.push(busy22.id);
+  const busyRun22 = await settle22(busy22.id, (j) => TERMINAL22.includes(j.status) || j.status === "RUNNING", 20, 20000);
+  const queued22 = await jobPost("DEDUPE", { strategy: "phone", action: "flag", keepOldest: true });
+  jobs22Made.push(queued22.id);
+  const queuedMark22 = await fetch(`${API}/jobs/${queued22.id}?action=cancel`, { method: "POST", headers: H });
+  log(`  ${impTwins22.imported} rows imported in 200 phone-pairs; a DEDUPE sweep found the slot (${busyRun22.status}), a second queued behind it as ${queued22.status} and was cancelled -> ${queuedMark22.status}`);
+  const busyDone22 = await settle22(busy22.id, (j) => TERMINAL22.includes(j.status), 200, 60000);
+  const never22 = await settle22(queued22.id, (j) => TERMINAL22.includes(j.status), 200, 60000);
+  log(`  when the worker was free it read the queued row and did not begin it: ${never22.status} startedAt=${String(never22.startedAt)} processed=${never22.processedItems} records=${never22.report?.results?.recorded}`);
+  check(never22.status === "CANCELLED" && !never22.startedAt && Number(never22.processedItems) === 0,
+    "a mark that lands before the worker begins is obeyed by never beginning — no RUNNING stamped over the operator's word");
+  check(never22.report?.problem === null && never22.report?.measured === false && /stamped no denominator/.test(String(never22.report?.verdictNote)),
+    "and the row is read as a stop that claimed no crowd, not as a job that finished nothing");
+  check(Number(never22.report?.results?.recorded) === 0, "no row of its crowd was visited, so no record claims one");
+  check(busyDone22.status === "COMPLETED", "the worker that refused the marked row kept working: the sweep that held the slot finished its own crowd");
+
+  log("  left alone by name: lib/exporter.ts (its work is one file written over the whole crowd, and Export.status has no word for a cancelled file) and lib/scraper.ts (unreachable on an instance with no browser, and still typing its 100).");
+
+  for (const id of jobs22Made) await fetch(`${API}/jobs/${id}`, { method: "DELETE", headers: H });
+  const where22 = `email LIKE 'stop41%.${RUN}@crowd.test' OR email LIKE 'twin41%.${RUN}@crowd.test'`;
+  const removed22 = q22(`WITH d AS (DELETE FROM "Lead" WHERE ${where22} RETURNING id) SELECT count(*) FROM d`);
+  const left22 = q22(`SELECT count(*) FROM "Lead" WHERE ${where22}`);
+  const recs22 = q22(`SELECT count(*) FROM "JobResult" WHERE "jobId" IN ('${jobs22Made.join("','")}')`);
+  log(`  cleanup: ${removed22} crowd leads deleted, ${jobs22Made.length} jobs deleted through the door`);
+  check(left22 === "0" && recs22 === "0", `cleanup: ${left22} crowd rows and ${recs22} per-item records left from this step`);
+  await fetch(`${API}/webhooks/${sub22.id}`, { method: "DELETE", headers: H });
 }
 
 await capture.close();

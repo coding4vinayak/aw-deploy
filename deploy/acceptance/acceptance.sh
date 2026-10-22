@@ -270,6 +270,7 @@ check_paid() {
   check_discovery "$base" yes
   check_linkcard "$base"
   check_demo_workspace "$base"
+  check_suite_prices "$base"
 }
 
 check_hub() {
@@ -337,6 +338,7 @@ check_flow() {
   check_discovery "$base" yes
   check_linkcard "$base"
   check_demo_workspace "$base"
+  check_suite_prices "$base"
 }
 
 check_pdf() {
@@ -349,6 +351,63 @@ check_pdf() {
 # The marketing site: front page now; the AI files (llms.txt, openapi.json,
 # robots AI directives) ship with deploy/site-ai-pack. Not yet applied = an
 # honest SKIP; served-but-wrong = FAIL.
+
+# The suite on a pricing page: every companion's price must be the price that
+# product actually charges.
+#
+# Each product's pricing page names the products teams pair it with, and says
+# what each of them costs. A price there that the other product no longer
+# charges is a price a buyer would be quoted for a plan that does not exist —
+# and the other product's own page is right there to be compared with. So the
+# check fetches the companion's own pricing page and compares.
+check_suite_prices() {
+  local base="${1%/}" page section entry name href price other other_body
+  page=$(get_body "$base/pricing")
+  if [ -z "$page" ]; then
+    skip 'the suite section quotes real prices' "no pricing page to read"
+    return
+  fi
+  # The section: the lines after its heading, up to the next heading. (The
+  # heading itself contains an <h2>, so a range that ends at the next <h2
+  # would end on the heading and read nothing at all.)
+  section=$(printf '%s' "$page" | sed -n '/Also in the Abetworks suite/,$p' | sed '1d' | sed '/<h2/,$d')
+  if [ -z "$section" ]; then
+    skip 'the suite section quotes real prices' "the page has no suite section"
+    return
+  fi
+  local problems="" compared=0
+  # Each companion is an anchor with the product's own host in it and the price
+  # in its text.
+  while IFS= read -r entry; do
+    href=$(printf '%s' "$entry" | grep -oE 'href="https?://[a-z.]+abetworks\.in[^"]*"' | head -1 | sed 's/href="//; s/"$//')
+    name=$(printf '%s' "$entry" | grep -oE '>[A-Z][A-Za-z]+</span>' | head -1 | sed 's/>//; s#</span>##')
+    price=$(printf '%s' "$entry" | grep -oE '\$[0-9][0-9,]*(\.[0-9]+)?' | head -1)
+    [ -z "$href" ] || [ -z "$price" ] && continue
+    compared=$((compared + 1))
+    # A rehearsal can point the companions at a local stand-in; in production
+    # the link in the section is the address to fetch.
+    local companion_base="${AW_SUITE_COMPANION_BASE:-${href%/}}"
+    other_body=$(get_body "$companion_base/pricing")
+    if [ -z "$other_body" ]; then
+      problems="$problems $name (its own page did not answer)"
+      continue
+    fi
+    if ! printf '%s' "$other_body" | grep -qF "$price"; then
+      problems="$problems $name quotes $price, which its own page does not"
+    fi
+  done <<< "$(printf '%s' "$section" | tr '\n' ' ' | grep -oE '<a href="https?://[a-z.]+abetworks\.in[^"]*"[^>]*>.*?</a>')"
+  if [ "$compared" -eq 0 ]; then
+    # Nothing to compare — the section's companions are reached by mail rather
+    # than by a link, so there is no page to check them against. Said out loud
+    # rather than passed in silence.
+    skip 'the suite section quotes real prices' "no companion links to a page to compare"
+  elif [ -n "$problems" ]; then
+    bad 'the suite section quotes real prices' "$problems"
+  else
+    ok 'the suite section quotes real prices' "$compared companion(s), each quoting its own page's price"
+  fi
+}
+
 check_site() {
   local base="$1" c b
   check_front "$base"

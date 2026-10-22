@@ -378,6 +378,26 @@ check_site() {
     else
       bad 'site openapi.json (contract)' 'served but not an OpenAPI document'
     fi
+    # The contract the site advertises must be the contract the gateway
+    # serves: the same paths, so an integrator who reads the site's copy finds
+    # the endpoint they need. The pack ships a copy and prefers the live one,
+    # and this is what says whether the copy that landed is the right one —
+    # the copy that was in the pack was two versions behind and missing the
+    # NuCRM inbound bridge.
+    local gateway_spec gateway_paths site_paths missing
+    gateway_spec="${AW_GATEWAY_SPEC_URL:-https://api.abetworks.in/api/v1/openapi}"
+    gateway_paths=$(curl -fsS --max-time 15 "$gateway_spec" 2>/dev/null | grep -oE '"/[^"]+":' | tr -d '":' | sort -u)
+    if [ -z "$gateway_paths" ]; then
+      skip 'site openapi.json is the gateway contract' "the gateway contract was not reachable"
+    else
+      site_paths=$(printf '%s' "$b" | grep -oE '"/[^"]+":' | tr -d '":' | sort -u)
+      missing=$(comm -23 <(printf '%s\n' "$gateway_paths") <(printf '%s\n' "$site_paths"))
+      if [ -n "$missing" ]; then
+        bad 'site openapi.json is the gateway contract' "the site contract is missing:$(printf '%s' "$missing" | tr '\n' ' ')"
+      else
+        ok 'site openapi.json is the gateway contract' "$(printf '%s\n' "$site_paths" | wc -l | tr -d ' ') paths, the same set"
+      fi
+    fi
   else
     skip 'site openapi.json (contract)' "$c — ships with deploy/site-ai-pack/"
   fi

@@ -75,7 +75,24 @@ if [ -f next.config.ts ] || [ -f next.config.js ] || [ -f next.config.mjs ] || [
     echo "      product pages and re-run."
   fi
 
-  cp "$FILES/openapi.json" public/openapi.json
+  # The OpenAPI contract: the gateway's **live** one when it can be reached,
+  # the pack's copy otherwise. The copy went stale once already — two versions
+  # behind, and missing the NuCRM inbound bridge, which is the one endpoint
+  # the suite's compatibility story rests on. A contract that has drifted from
+  # the API it describes is worse than no contract: an integrator reads it and
+  # finds the endpoint they need missing.
+  GATEWAY_SPEC="${AW_GATEWAY_SPEC_URL:-https://api.abetworks.in/api/v1/openapi}"
+  FETCHED="$(mktemp)"
+  if command -v curl > /dev/null 2>&1 && curl -fsS --max-time 20 "$GATEWAY_SPEC" -o "$FETCHED" 2>/dev/null \
+     && node -e 'const s=require("fs").readFileSync(process.argv[1],"utf8");const j=JSON.parse(s);if(!j.paths||!Object.keys(j.paths).length)process.exit(1)' "$FETCHED"; then
+    cp "$FETCHED" public/openapi.json
+    echo "the OpenAPI contract: fetched live from $GATEWAY_SPEC"
+  else
+    cp "$FILES/openapi.json" public/openapi.json
+    echo "NOTE: the gateway contract could not be fetched ($GATEWAY_SPEC) — the pack's copy was"
+    echo "      installed instead. Refresh it with deploy/site-ai-pack/refresh-openapi.sh."
+  fi
+  rm -f "$FETCHED"
 
   ROUTE=""
   for c in app/robots.ts app/robots.js src/app/robots.ts src/app/robots.js; do

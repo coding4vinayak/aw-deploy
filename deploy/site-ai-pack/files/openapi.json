@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AbetAPI",
-    "version": "1.0.2",
+    "version": "1.2.0",
     "description": "Keys, webhooks, usage and SSO connections. Auth is a workspace key in `Authorization: Bearer ab_live_…` or `x-api-key`; only its hash is stored."
   },
   "servers": [
@@ -604,6 +604,173 @@
           },
           "403": {
             "description": "Needs events:write",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A field was refused; see error.fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inbound/nucrm/{id}": {
+      "post": {
+        "operationId": "receiveNucrmEvent",
+        "summary": "Receive a signed NuCRM webhook and publish it to matching subscriptions",
+        "description": "This is the address a NuCRM integration webhook posts to — the receiving end of the bridge, where `POST /api/v1/events` is the publishing end your own code calls. Create a source in the dashboard (Connect NuCRM), then configure the NuCRM integration with this URL, `Authorization: Bearer <key>` plus the integration's secret. The body is NuCRM's envelope; `x-nucrm-signature` is `sha256=` + HMAC-SHA256 of the exact bytes, keyed by the source's secret (the `sha256=` prefix is optional and both spellings verify). `x-nucrm-delivery` deduplicates NuCRM's own retries: a repeat answers `200` with `duplicate: true` and publishes nothing. An accepted event gets one Delivery per matching subscription, counted like `POST /api/v1/events`; a paused source answers 409 and NuCRM parks the delivery after its five attempts.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Inbound source id (dashboard → Connect NuCRM).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-nucrm-signature",
+            "in": "header",
+            "description": "HMAC-SHA256 of the request body, hex, optionally prefixed `sha256=`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-nucrm-delivery",
+            "in": "header",
+            "description": "NuCRM's delivery id. A repeat of one already accepted answers 200 with `duplicate: true`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "event"
+                ],
+                "properties": {
+                  "event": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                  },
+                  "timestamp": {
+                    "type": "string",
+                    "description": "NuCRM's ISO moment. Declared, not interpreted — deliveries carry their own."
+                  },
+                  "tenant_id": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "description": "NuCRM's tenant. Declared, not interpreted."
+                  },
+                  "data": {
+                    "description": "The payload every matching subscriber receives, signed. Omit it for none; `null` is refused.",
+                    "oneOf": [
+                      {
+                        "type": "object"
+                      },
+                      {
+                        "type": "array"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Duplicate delivery: already accepted, nothing published again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted — one Delivery per matching subscription (same receipt as POST /api/v1/events)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Body is not a JSON object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No key, or x-nucrm-signature missing/does not match the source's secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs events:write",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such inbound source in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Source paused",
             "content": {
               "application/json": {
                 "schema": {

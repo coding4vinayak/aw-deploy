@@ -94,6 +94,35 @@ prints the diff; pushing is opt-in.
 `SITE_ORIGIN` overrides the origin the index is written against
 (default `https://abetworks.in`).
 
+### The OpenAPI contract
+
+The site advertises an OpenAPI contract, and the pack ships a copy of the
+gateway's. **The copy went stale once**: it was two versions behind and did
+not carry `/api/v1/inbound/nucrm/{id}` — the one endpoint the suite's
+NuCRM-compatibility story rests on. A contract an integrator reads and finds
+the endpoint missing is worse than no contract.
+
+So the pack now **prefers the live contract**:
+
+```sh
+# the pack fetches https://api.abetworks.in/api/v1/openapi when it can
+AW_GATEWAY_SPEC_URL=https://api.abetworks.in/api/v1/openapi \
+  deploy/site-ai-pack/apply.sh ~/path/to/site-repo
+```
+
+and falls back to the shipped copy when the gateway cannot be reached, saying
+so. The copy itself is refreshed from the gateway's own generator:
+
+```sh
+deploy/site-ai-pack/refresh-openapi.sh ~/path/to/abetapi-repo
+# → the gateway contract: 1.2.0 — 16 paths
+# → refreshed: deploy/site-ai-pack/files/openapi.json
+```
+
+And the acceptance sweep checks the contract that **landed** on the site
+against the contract the gateway is serving — the same paths on both sides, or
+the sweep says which one is missing.
+
 ## Verify after deploy (the acceptance-style one-liners)
 
 ```sh

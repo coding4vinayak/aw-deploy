@@ -25,7 +25,8 @@
 // while the in-run duplicate still collides on purpose.
 import { startCapture } from "./capture.mjs";
 import crypto from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 const { API_KEY: KEY, APP_BASE = "http://localhost:3300", HOOK_PORT = "3799" } = process.env;
 if (!KEY) throw new Error("API_KEY env var missing (run-demo.sh mints it)");
@@ -952,18 +953,19 @@ if (unstamped16.length) {
 log("\n═══ STEP 17 — and the next minute takes the bytes: retired means gone, and the row still names what it wrote ═══");
 // Measured before this round, in the database STEP 16 has just described: 27 COMPLETED rows,
 // 2 of them past their date and BOTH files still on disk byte-exact (4,195 and 957 bytes);
-// 51 `/tmp/export_*` against those rows, so 24 files named by no row at all — the work of
-// `DELETE /api/exports/{id}`, which has always removed the row and left the file; 0 rows whose
-// file was missing, i.e. the missing-file 410 had never fired here; and zero sites in `src/`
-// that had ever deleted anything. A refused door is a policy; the disk was still holding 16
-// leads' contact rows.
+// 51 `/tmp/export_*` against those rows, so 24 files named by no row at all (this step called
+// them `DELETE /api/exports/{id}`'s work; STEP 18 measures that claim and retires it — they are
+// an hour of job residue from a table that was emptied, and the door had never been walked
+// here); 0 rows whose file was missing, i.e. the missing-file 410 had never fired here; and zero
+// sites in `src/` that had ever deleted anything. A refused door is a policy; the disk was still
+// holding 16 leads' contact rows.
 //
 // The purge is `planPurge` — the row's own date first, then the shape the worker can actually
 // produce (`/tmp/export_<digits>.<csv|json|xlsx|pdf>`), and never an unstamped row — and the
 // `unlink` that acts on it is the only one in the application, on the once-a-minute sweep that
 // already queues the day's work. So this step waits for the minute instead of asserting the
 // deletion, and the files that step deliberately does not touch have to still be there when it
-// arrives: the pre-#35 rows' bytes, and the 24 orphans.
+// arrives: the pre-#35 rows' bytes, and the orphans STEP 18 takes one of out of.
 const path17 = fin16.filePath;
 const bytes17 = existsSync(path17) ? statSync(path17).size : null;
 log(`  ${path17}: ${bytes17 ?? "(already gone)"} bytes on disk, ${Math.round((Date.now() - dies16) / 1000)}s after the door closed on it`);
@@ -1011,8 +1013,8 @@ check(url17.downloadUrl === undefined && url17.error === dl17body.error, "the UR
 const orphansStill17 = orphans17.filter((path) => existsSync(path)).length;
 const legacyStill17 = legacy17.filter((r) => existsSync(r.filePath)).length;
 log(`  after the sweep: ${orphansStill17}/${orphans17.length} files named by no row are still on disk, and ${legacyStill17}/${legacy17.length} pre-#35 rows still have theirs`);
-check(orphansStill17 === orphans17.length,
-  "the orphans are untouched — `DELETE /api/exports/{id}` still deletes the row and leaves the file, which this round counts and does not claim to have fixed");
+  check(orphansStill17 === orphans17.length,
+  "the orphans are untouched — #36 counted the files no row names and reclaimed none of them, which is still true of the sweep after #37 changed the delete door");
 if (legacy17.length > 0) {
   check(legacyStill17 === legacy17.length,
     "and no row that was never promised a lifetime lost its file: `null` is not an expiry, so it is not a deletion either");
@@ -1036,5 +1038,156 @@ if (runLog === null) {
 const left17 = readdirSync("/tmp").filter((f) => /^export_\d+\.(csv|json|xlsx|pdf)$/.test(f)).length;
 log(`  /tmp/export_* now holds ${left17} files (${onDisk17.length} before the sweep): the retired ones this app named are gone, the rest stayed.`);
 
+
+log("\n═══ STEP 18 — deleting the record deletes the file it named, and the files with no record are counted out loud ═══");
+// #36 closed a retired export's door, took its bytes on the next sweep minute, and attributed the
+// 24 files no row names to `DELETE /api/exports/{id}`. Measured again before this round, that
+// attribution was too specific: `Job` rows of type `EXPORT` number 60 against 29 `Export` rows,
+// and all 31 jobs naming an `exportId` with no row were created inside one hour (2026-10-17
+// 07:00), 24 of them `COMPLETED` — the same 24, in the same five minutes the orphan mtimes fill.
+// This demo never called `DELETE` on an export, no test calls the four writers, and three sampled
+// orphans have `atime == mtime`: nobody ever downloaded them either. The residue is a table
+// emptied in an hour, not a door's doing — and the door's own half of that sentence is what this
+// round could actually settle. It deleted the row and left the bytes. Now it does not.
+//
+// The row goes first, then the same shape guard the sweep uses decides whether the path goes with
+// it. That order is chosen out of the two failures available: a row outliving its file is a
+// download door pointing at nothing (the state the operating system used to produce by reclaiming
+// `/tmp`, and the reason a second 410 sentence exists), while a file outliving its row is what
+// `/tmp` already holds. A file no row names stays exactly that — counted, printed once a minute
+// when the number moves, never reclaimed: no `expiresAt`, no `status`, no `workspaceId`, so there
+// is nothing to decide from and no tenant whose authorization could cover deleting it.
+const dbUrl18 = process.env.DATABASE_URL ?? "postgresql://leadworks:leadworks@localhost:5432/leadworks";
+let dbBlocked18 = false;
+const psql18 = (sql, rows) => {
+  if (dbBlocked18) return null;
+  try {
+    return execFileSync("psql", [dbUrl18, "-v", "ON_ERROR_STOP=1", rows ? "-Atc" : "-c", sql], { encoding: "utf8" });
+  } catch (error) {
+    dbBlocked18 = true;
+    log(`  psql is not reachable here (${String(error).slice(0, 70)}), so the parts of this step that need the whole table are skipped rather than passed.`);
+    return null;
+  }
+};
+const censusCount = (line) => Number(/census: (\d+) files/.exec(line)?.[1] ?? NaN);
+const readRunLog = () => {
+  try { return readFileSync(new URL("./.run-leadworks.log", import.meta.url), "utf8"); } catch { return null; }
+};
+
+const gone18 = fin16.filePath;
+const del18aRes = await fetch(`${API}/exports/${exp16.id}`, { method: "DELETE", headers: H });
+const del18a = await del18aRes.json();
+const get18a = await fetch(`${API}/exports/${exp16.id}`, { headers: H });
+log(`  DELETE the export STEP 17's sweep already reclaimed: HTTP ${del18aRes.status} ${JSON.stringify(del18a)}`);
+check(del18aRes.status === 200 && del18a.ok === true && del18a.file === "already gone from this server",
+  "a row whose bytes the sweep took earlier is deleted without pretending to take them again — the door names the state it found instead of calling it a removal");
+check(get18a.status === 404, "and the record is gone, so nothing is left handing out a 410 for it");
+check(!existsSync(gone18), "the file the sweep removed stayed removed: reporting a missing file is not a second attempt to delete one");
+
+const finish18 = async (format, fields) => {
+  const created = await (await fetch(`${API}/exports`, {
+    method: "POST", headers: H, body: JSON.stringify({ format, fields }),
+  })).json();
+  for (let i = 0; i < 80; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    const cur = await (await fetch(`${API}/exports/${created.export.id}`, { headers: H })).json();
+    if (["COMPLETED", "FAILED"].includes(cur.status)) return cur;
+  }
+  return null;
+};
+
+const fin18b = await finish18("JSON", ["email", "company", "status"]);
+const path18b = fin18b?.filePath ?? "";
+const bytes18b = fin18b && existsSync(path18b) ? statSync(path18b).size : null;
+log(`  a fresh COMPLETED export: ${fin18b?.id} → ${path18b}, ${bytes18b} bytes on disk where the row says ${fin18b?.fileSize}`);
+check(fin18b?.status === "COMPLETED" && typeof path18b === "string" && bytes18b === fin18b?.fileSize,
+  "one file this application wrote, named truthfully by its row — the state a delete starts from");
+
+const del18bRes = await fetch(`${API}/exports/${fin18b.id}`, { method: "DELETE", headers: H });
+const del18b = await del18bRes.json();
+const get18b = await fetch(`${API}/exports/${fin18b.id}`, { headers: H });
+log(`  DELETE it: HTTP ${del18bRes.status} ${JSON.stringify(del18b)}`);
+check(del18bRes.status === 200 && del18b.ok === true && del18b.file === "removed",
+  "the answer carries the word for what happened to the bytes, not only that the row is gone — a bare `{ ok: true }` was the over-claim this round removes");
+check(!existsSync(path18b), "and the file really is not there: a deleted export no longer leaves its leads' rows sitting in /tmp");
+check(get18b.status === 404, "the row went with it, so there is nothing left naming a path that has been deleted");
+
+const sentinel18c = `/tmp/leadworks-demo-not-an-export-${RUN}.txt`;
+writeFileSync(sentinel18c, "a file no export worker wrote\n");
+const fin18c = await finish18("CSV", ["email", "company"]);
+const real18c = fin18c?.filePath ?? "";
+const moved18c = fin18c === null ? null : psql18(
+  `UPDATE "Export" SET "filePath" = '${sentinel18c}' WHERE id = '${fin18c.id}'`,
+  false,
+);
+const guardRan18 = fin18c !== null && moved18c !== null;
+log(`  a row's filePath column rewritten by hand to ${sentinel18c}${moved18c === null ? " (the UPDATE did not run, so this case is skipped)" : ""}, while ${real18c} is what the worker actually wrote`);
+check(moved18c !== null && existsSync(sentinel18c),
+  "the setup is real: a column can hold any string, which is the reason a guard has to exist at the door and not only in the sweep");
+
+if (guardRan18) {
+  const del18cRes = await fetch(`${API}/exports/${fin18c.id}`, { method: "DELETE", headers: H });
+  const del18c = await del18cRes.json();
+  log(`  DELETE a row whose path is not an export artifact: HTTP ${del18cRes.status} ${JSON.stringify(del18c)}`);
+  check(del18cRes.status === 200 && del18c.ok === true && del18c.file === "path is not an export artifact",
+    "the door deletes the record and refuses the bytes it cannot prove it wrote, and says which reason it refused on");
+  check(existsSync(sentinel18c), "the file behind that path is untouched — the guard is not a warning that deletes anyway");
+  check(existsSync(real18c),
+    "and the file it really wrote is now named by no row at all, which is the state the census counts and no code in this application deletes");
+  unlinkSync(sentinel18c);
+  log(`  (the sentinel this step wrote by hand is removed again; nothing ever guarded by the app's own shape check saw a path like it)`);
+}
+
+const runLog18 = readRunLog();
+if (runLog18 === null) {
+  log("  the app's stdout is not readable from this script, so the census line is not quoted here — the counts above stand on their own.");
+} else {
+  const lines18 = runLog18.split("\n").filter((line) => line.includes("Export file census:"));
+  const last18 = lines18.at(-1) ?? "";
+  const before18 = censusCount(last18);
+  log(`  the sweep has printed ${lines18.length} census line${lines18.length === 1 ? "" : "s"} this run; the last one says:\n    ${last18}`);
+  check(lines18.length > 0 && Number.isInteger(before18),
+    "once a minute the application says out loud how many export files no record claims — the count #36 attributed without measuring is now a number on a screen");
+  check(/no expiry, no status and no workspace to decide from/.test(last18),
+    "and the same line says why that number is not a to-do list");
+
+  if (guardRan18) {
+    let grew18 = null;
+    const t018 = Date.now();
+    log(`  waiting for the sweep to notice the file the guard refused (${before18} → ${before18 + 1})…`);
+    while (Date.now() - t018 < 130_000) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const newest = (readRunLog() ?? "").split("\n").filter((l) => l.includes("Export file census:")).at(-1) ?? "";
+      if (censusCount(newest) > before18) { grew18 = newest; break; }
+    }
+    if (grew18 === null) {
+      check(false, `no census line above ${before18} appeared inside 130s — the sweep is not recounting residue, or does not print when it moves`);
+    } else {
+      log(`    ${grew18}`);
+      check(true, "a file that stopped being named by a row is counted by the next sweep minute — residue gets noticed, and gets no deletion invented for it");
+    }
+  }
+
+  const whole18 = psql18('SELECT "filePath" FROM "Export" WHERE "filePath" IS NOT NULL', true);
+  if (whole18 === null) {
+    log("  without the whole table this script cannot recount the census independently — the checks above stand on their own.");
+  } else {
+    const named18 = new Set(whole18.split("\n").filter(Boolean));
+    const onDisk18 = readdirSync("/tmp").filter((f) => /^export_\d+\.(csv|json|xlsx|pdf)$/.test(f)).map((f) => `/tmp/${f}`);
+    const unclaimed18 = onDisk18.filter((path) => !named18.has(path)
+      && Date.now() - Number(/^\/tmp\/export_(\d+)\./.exec(path)[1]) > 60_000);
+    const residue18 = unclaimed18.reduce((sum, path) => sum + statSync(path).size, 0);
+    const logged18 = censusCount((readRunLog() ?? "").split("\n").filter((l) => l.includes("Export file census:")).at(-1) ?? "");
+    log(`  this script's own count of the same two sources: ${unclaimed18.length} files named by none of the ${named18.size} paths in the table, ${residue18} bytes (the sweep's last line said ${logged18})`);
+    if (guardRan18) {
+      check(unclaimed18.includes(real18c),
+        "the file the guard refused to delete is in this independent count — and it is still on the disk, because counted is the whole of what a census does");
+    } else {
+      log("  the guard case did not run, so this step made no new unclaimed file to look for in the count.");
+    }
+    check(Math.abs(logged18 - unclaimed18.length) <= 2,
+      "the number the sweep prints and the number an independent count of the same directory and the same table produce agree, within the two files another process on this shared database, or one crossing the 60-second line, can move between the two reads");
+  }
+}
 
 await capture.close();

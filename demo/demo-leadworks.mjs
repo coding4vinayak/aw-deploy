@@ -1743,11 +1743,27 @@ if (!dbOk22) {
     "a RUNNING row is measurable as it goes: the stamp carries its denominator, so the percentage is read while the job is still walking, not only at the finish line");
 
   const marked22 = await fetch(`${API}/jobs/${stopJob22.id}?action=cancel`, { method: "POST", headers: H });
-  const stopped22 = await settle22(stopJob22.id, (j) => TERMINAL22.includes(j.status), 25, 20000);
+  // Two writes make a stop: the door's mark, and the worker's own terminal stamp once the row it
+  // had already started finishes. Polling for the status alone reads the first and calls it the
+  // whole stop — which is exactly when a stopped row's counters sit one below its records. So
+  // this takes the mark's snapshot, then waits for the row to agree with the records it holds,
+  // and prints the gap between the two writes instead of hiding it.
+  const markSnap22 = await settle22(stopJob22.id, (j) => TERMINAL22.includes(j.status), 25, 20000);
+  const accountLanded22 = (j) => Number(j.processedItems ?? -1) + Number(j.failedItems ?? -1)
+    === (j.report?.results?.recorded ?? -2);
+  const stopped22 = markSnap22.timedOutAfterMs
+    ? markSnap22
+    : await settle22(stopJob22.id, accountLanded22, 25, 20000);
   const did22 = Number(stopped22.processedItems ?? 0), fail22 = Number(stopped22.failedItems ?? 0), all22 = Number(stopped22.totalItems ?? 0);
-  log(`  POST ?action=cancel -> ${marked22.status}; the row settled as ${stopped22.status} at ${did22}+${fail22} of ${all22}, progress=${stopped22.progress}%`);
+  const markCount22 = Number(markSnap22.processedItems ?? 0) + Number(markSnap22.failedItems ?? 0);
+  log(`  POST ?action=cancel -> ${marked22.status}; the door's mark read ${markCount22} of ${all22} with a row still in flight, the worker's own stamp settled at ${did22}+${fail22} of ${all22}, progress=${stopped22.progress}%`);
   log(`     verdict=${stopped22.report?.verdict} note=${String(stopped22.report?.verdictNote).slice(0, 190)}`);
   check(stopped22.status === "CANCELLED", "the worker read the mark and stopped: the row ends on the operator's word, not on a COMPLETED it ran past");
+  check(!stopped22.timedOutAfterMs && accountLanded22(stopped22),
+    "and the stop is the worker's write, not only the door's: the row's counters land on the records it holds");
+  const gap22 = did22 + fail22 - markCount22;
+  log(`     the gap between the door's mark and the worker's stamp: ${gap22} row(s) — the one that was already in flight`);
+  check(gap22 >= 0 && gap22 <= 1, `a stop lands in two writes and the window between them is exactly the in-flight row, never more (${gap22})`);
   check(did22 + fail22 >= 1 && did22 + fail22 < all22, `it stopped between rows — ${did22 + fail22} of ${all22} reached, ${all22 - did22 - fail22} never started`);
   check(stopped22.progress === Math.round(((did22 + fail22) / all22) * 100) && stopped22.progress < 100,
     `and its percentage is the arithmetic of those two numbers (${stopped22.progress}), not a typed 100`);

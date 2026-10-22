@@ -141,6 +141,15 @@ if [ "$NAME" = "analytics" ] || [ "$NAME" = "clinic" ]; then
   MAIL_ENV="EMAIL_WEBHOOK_URL=http://127.0.0.1:${HOOK_PORT}/email"
 fi
 
+# Leadworks STEP 16 proves that an export's own `expiresAt` closes the download door, and
+# a proof that needs seven days is not a demo. The shipped default stays seven days; the
+# demo boots this one app with a short retention instead. It is a setting on the process
+# and is read once, when an export finishes, so it stamps lifetimes belonging to rows this
+# run wrote — it cannot retire an export a longer-lived instance had already finished.
+if [ "$NAME" = "leadworks" ]; then
+  EXPORT_RETENTION_MS="${EXPORT_RETENTION_MS:-25000}"; export EXPORT_RETENTION_MS
+fi
+
 # ABET_ALLOW_PRIVATE_TARGETS=1 lets the app deliver to the local capture server;
 # in production this override is what every app deliberately refuses.
 (cd "$REPOS_DIR/$APP" && env ABET_ALLOW_PRIVATE_TARGETS=1 PORT="$PORT" $MAIL_ENV nohup npm run start > "$LOG" 2>&1 &)

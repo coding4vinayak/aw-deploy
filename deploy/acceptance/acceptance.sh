@@ -178,10 +178,17 @@ check_health_optional() {
 # populated: the empty state is a failure, not a pass.
 check_demo_workspace() {
   local base="$1" html link c body
+  # The demo link is wherever the app puts it: the landing page for the four
+  # apps that have one, the sign-in page for the app whose front door *is* the
+  # app. Both are promises, so both are followed.
   html=$(get_body "$base/")
   link=$(printf '%s' "$html" | grep -oE 'href="[^"]*workspace=demo[^"]*"' | head -1 | sed 's/href="//; s/"$//')
   if [ -z "$link" ]; then
-    skip 'the demo workspace is populated' "the landing page links no demo workspace"
+    html=$(get_body "$base/login")
+    link=$(printf '%s' "$html" | grep -oE 'href="[^"]*workspace=demo[^"]*"' | head -1 | sed 's/href="//; s/"$//')
+  fi
+  if [ -z "$link" ]; then
+    skip 'the demo workspace is populated' "the landing and sign-in pages link no demo workspace"
     return
   fi
   c=$(get_code "$base$link")

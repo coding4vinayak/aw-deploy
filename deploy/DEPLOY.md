@@ -160,6 +160,35 @@ DATABASE_URL='<external connection string>' npm run db:deploy   # idempotent
 DATABASE_URL='<same>'                       npm run seed:key    # prints the root key — copy it once
 ```
 
+**Seed the DEMO workspace of every app that has one.** This is the step that
+was missing, and it matters more than it sounds: the landing page of five of the
+apps says *"Open live demo — no card, ever"* and links straight at
+`/dashboard?workspace=demo`, and the analytics page goes further — *"the demo
+workspace has 102 events waiting"* and *"the demo ships three working
+metrics"*. A demo workspace that was never seeded is an **empty dashboard behind
+a promise**, and the first thing a prospect clicks is that link. So seed it,
+before the marketing is pointed at anything:
+
+```bash
+# one per app, against that app's own database (the external connection string)
+cd aw-abetanalytics && DATABASE_URL='<external connection string>' npm run db:seed
+cd aw-abetConnect  && DATABASE_URL='<external connection string>' npm run seed
+cd aw-abetagent    && DATABASE_URL='<external connection string>' npm run db:seed
+cd aw-leadworks    && DATABASE_URL='<external connection string>' npm run db:seed
+cd aw-leadgenius   && DATABASE_URL='<external connection string>' npm run db:seed
+cd aw-abetflow     && DATABASE_URL='<external connection string>' npm run db:seed
+```
+
+Each seed is idempotent (it leaves an existing demo workspace alone), prints
+what it created, and — where the app has one — the **demo sign-in** the login
+page mentions. AbetConnect's demo is the odd one: it is a *login*, not a public
+workspace, so its seed prints the demo credentials and its front door is the app
+itself; the other four need no account at all.
+
+The sweep checks the demo is really there, so this cannot be forgotten a
+second time: `acceptance.sh` follows each landing page's own demo link and
+fails if the demo workspace is empty.
+
 ```bash
 bash deploy/smoke-test.sh            # is every host up? — status codes
 bash deploy/acceptance/acceptance.sh # does it behave? — gates, 4xx on junk, honest copy

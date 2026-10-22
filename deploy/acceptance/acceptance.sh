@@ -171,6 +171,32 @@ check_health_optional() {
   esac
 }
 
+# The landing page promises a demo — "Open live demo — no card, ever" — and
+# links straight at it. A demo workspace that was never seeded is an EMPTY
+# dashboard behind that promise, and the first thing a prospect clicks is that
+# link. So the sweep follows the page's own link and insists the demo is
+# populated: the empty state is a failure, not a pass.
+check_demo_workspace() {
+  local base="$1" html link c body
+  html=$(get_body "$base/")
+  link=$(printf '%s' "$html" | grep -oE 'href="[^"]*workspace=demo[^"]*"' | head -1 | sed 's/href="//; s/"$//')
+  if [ -z "$link" ]; then
+    skip 'the demo workspace is populated' "the landing page links no demo workspace"
+    return
+  fi
+  c=$(get_code "$base$link")
+  if [ "$c" != 200 ]; then
+    bad 'the demo workspace is populated' "$link → $c"
+    return
+  fi
+  body=$(get_body "$base$link")
+  if printf '%s' "$body" | grep -qiE 'no (metrics|leads|campaigns|agents|sequences|conversations) yet'; then
+    bad 'the demo workspace is populated' "$link is an empty workspace — seed it"
+  else
+    ok 'the demo workspace is populated' "$link → 200, seeded"
+  fi
+}
+
 check_paid() {
   local base="$1" dash="$2"
   check_front "$base"; check_health "$base"
@@ -194,6 +220,7 @@ check_paid() {
   if is_4xx "$w2"; then ok 'billing webhook rejects forged signatures' "→ $w2"; else bad 'billing webhook rejects forged signatures' "→ $w2"; fi
   check_discovery "$base" yes
   check_linkcard "$base"
+  check_demo_workspace "$base"
 }
 
 check_hub() {
@@ -260,6 +287,7 @@ check_flow() {
   if is_4xx "$c"; then ok 'workflow webhooks refuse a wrong secret' "→ $c"; else bad 'workflow webhooks refuse a wrong secret' "→ $c"; fi
   check_discovery "$base" yes
   check_linkcard "$base"
+  check_demo_workspace "$base"
 }
 
 check_pdf() {

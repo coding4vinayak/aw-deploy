@@ -136,7 +136,7 @@ export function labelFromPath(p) {
  * is asserted about the site that the site does not say about itself — in
  * particular no prices, because the site states none.
  */
-export function buildLlmsTxt({ origin, siteName, summary, groups, hosts, notes = [] }) {
+export function buildLlmsTxt({ origin, siteName, summary, groups, hosts, notes = [], full = false }) {
   const lines = [];
   lines.push(`# ${siteName}`);
   lines.push("");
@@ -170,7 +170,121 @@ export function buildLlmsTxt({ origin, siteName, summary, groups, hosts, notes =
   lines.push("## Machine-readable");
   lines.push("");
   lines.push(`- Sitemap: ${origin}/sitemap.xml`);
+  if (full) lines.push(`- Full content: ${origin}/llms-full.txt`);
   lines.push(`- This index: ${origin}/llms.txt`);
+  lines.push("");
+  return lines.join("\n");
+}
+
+/**
+ * The readable text of one of the site's own pages, for the deep-content file.
+ *
+ * `header` / `nav` / `footer` / `aside` are the site's furniture, not its
+ * content — a deep-content file that repeats the nav on every page is noise
+ * priced as depth — and `script` / `style` / `noscript` / `template` are not
+ * prose at all. When the page has a `<main>`, that is the content; otherwise
+ * it is the body with the furniture removed. Block-level closes become
+ * paragraph breaks, the rest of the tags are dropped, and the common entities
+ * are decoded (`&amp;` last, so it is decoded once).
+ */
+export function extractMainText(html) {
+  let scope = html;
+  const main = html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i);
+  if (main) {
+    scope = main[1];
+  } else {
+    for (const tag of ["header", "nav", "footer", "aside"]) {
+      scope = scope.replace(new RegExp(`<${tag}\\b[\\s\\S]*?<\\/${tag}\\s*>`, "gi"), " ");
+    }
+  }
+  const text = scope
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(script|style|noscript|template)\b[\s\S]*?<\/\1\s*>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|h[1-6]|li|tr|div|section|blockquote|pre)>/gi, "\n")
+    .replace(/<h[1-6]\b[^>]*>/gi, "\n\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&#\d{2,5};?/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&ldquo;|&rdquo;|&#8220;|&#8221;/gi, '"')
+    .replace(/&lsquo;|&rsquo;|&#8216;|&#8217;/gi, "'")
+    .replace(/&mdash;/gi, "—")
+    .replace(/&ndash;/gi, "–")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;|&apos;|&#0?34;/gi, '"')
+    .replace(/&amp;/gi, "&");
+  return text
+    .split("\n")
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * The deep-content companion to the index: the same reviewed page list, but
+ * every page followed by its own text, extracted from the site itself. It is
+ * llms-full.txt in the llmstxt convention — the file an engine pulls when it
+ * wants the whole substance in one fetch, and the line the hub's own
+ * AI-visibility tool scores (4 points).
+ *
+ * Nothing here is richer than the site is: the text comes from the pages, the
+ * title comes from each page's own `<title>`, and a page whose body could not
+ * be read is named as such rather than padded with invention.
+ */
+export function buildLlmsFullTxt({ origin, siteName, summary, groups, hosts, notes = [] }) {
+  const lines = [];
+  lines.push(`# ${siteName}`);
+  lines.push("");
+  lines.push(`> ${summary}`);
+  lines.push("");
+  if (notes.length) {
+    for (const n of notes) lines.push(n);
+    lines.push("");
+  }
+  lines.push("This is the full-content companion to the index at");
+  lines.push(`${origin}/llms.txt — one section per reviewed page, with the`);
+  lines.push("page's own text. It is generated from the pages themselves, so it can");
+  lines.push("never say more than the site does.");
+  lines.push("");
+
+  for (const group of groups) {
+    if (!group.pages.length) continue;
+    lines.push(`## ${group.title}`);
+    lines.push("");
+    for (const p of group.pages) {
+      lines.push(`### ${p.label} — ${origin}${p.path}`);
+      lines.push("");
+      if (p.title && p.title !== p.label) {
+        lines.push(`Page title: “${p.title}”.`);
+        lines.push("");
+      }
+      if (p.text) {
+        lines.push(p.text);
+        lines.push("");
+      } else {
+        lines.push(`(its body is empty or unreadable in the repository — read it at ${origin}${p.path})`);
+        lines.push("");
+      }
+    }
+  }
+
+  if (hosts.length) {
+    lines.push("## Other hosts");
+    lines.push("");
+    lines.push("These are the Abetworks product hosts this site's own sitemap links to. Each is sold");
+    lines.push("standalone, and each publishes its own machine-readable index at `<host>/llms.txt` —");
+    lines.push("the hub at `hub.abetworks.in` also publishes its own `llms-full.txt`.");
+    lines.push("");
+    for (const h of hosts) lines.push(`- ${h.url}${h.note ? ` — ${h.note}` : ""}`);
+    lines.push("");
+  }
+
+  lines.push("## Machine-readable");
+  lines.push("");
+  lines.push(`- The index: ${origin}/llms.txt`);
+  lines.push(`- Sitemap: ${origin}/sitemap.xml`);
+  lines.push(`- This file: ${origin}/llms-full.txt`);
   lines.push("");
   return lines.join("\n");
 }
@@ -269,13 +383,23 @@ function main(argv) {
 
   const pages = manifest.map((p) => {
     let title = null;
+    let text = null;
     try {
-      title = extractTitle(readFileSync(fileForPath(site, p.path), "utf8"));
+      const html = readFileSync(fileForPath(site, p.path), "utf8");
+      title = extractTitle(html);
+      text = extractMainText(html);
     } catch {
       title = null;
+      text = null;
     }
-    return { path: p.path, label: p.label || labelFromPath(p.path), title };
+    return { path: p.path, label: p.label || labelFromPath(p.path), title, text };
   });
+  // A page whose body could not be read is named in the file itself — the
+  // deep-content file must never be quietly thinner than the site.
+  const notes = [];
+  for (const p of pages) {
+    if (!p.text) notes.push(`note: the body of ${p.path} is empty or unreadable in the repository — its section names the page instead of inventing one.`);
+  }
 
   const groups = groupsFrom(path.join(here, "site-groups.json"), pages);
   const llms = buildLlmsTxt({
@@ -285,12 +409,26 @@ function main(argv) {
       "Abet Works is a data-and-AI services company: Data Analytics, Artificial Intelligence, Digital Services, Business Consultancy, Resources and Collaboration. Every page listed here is a real page on this site.",
     groups,
     hosts,
+    // The index points at its companion only when the companion is written
+    // with it — an index that advertises a deep-content file the site does
+    // not serve is exactly the dead link this pack exists to prevent.
+    full: Boolean(args.write),
+  });
+  const llmsFull = buildLlmsFullTxt({
+    origin,
+    siteName: "Abet Works",
+    summary:
+      "Abet Works is a data-and-AI services company: Data Analytics, Artificial Intelligence, Digital Services, Business Consultancy, Resources and Collaboration. Every page listed here is a real page on this site.",
+    groups,
+    hosts,
+    notes,
   });
   const sitemap = buildSitemapXml({ origin, pages: manifest, hosts });
   const robots = buildRobotsTxt({ origin });
 
   if (args.write) {
     writeIfChanged(path.join(site, "llms.txt"), llms);
+    writeIfChanged(path.join(site, "llms-full.txt"), llmsFull);
     writeIfChanged(path.join(site, "robots.txt"), robots);
     writeIfChanged(sitemapPath, sitemap);
   } else {

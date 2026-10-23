@@ -127,7 +127,10 @@ It installs `/llms.txt` (the suite index — every product, its real price, its
 pages), `/openapi.json` (the AbetAPI contract) and the AI block in
 `robots.txt`, and refuses to install the index on a site that has no
 `/products/<slug>/` pages, because a machine-readable index that names pages
-the site does not have is worse than no index.
+the site does not have is worse than no index. It does **not** install
+`llms-full.txt` there — a Next app's page bodies are compiled routes, not
+readable from the repo, and the index it copies carries no pointer that would
+404 (the suite's deep content lives on `hub.abetworks.in`).
 
 **The services site** (the public repo) is already covered: its own PRs carry
 `llms.txt`, `robots.txt`, a rebuilt sitemap, and a share card + structured

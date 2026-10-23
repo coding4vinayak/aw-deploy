@@ -19,6 +19,8 @@
 #     document, versioned, pointing its servers at the host it is fetched from
 #   · the marketing site's AI files serve once shipped (missing = skip, see
 #     deploy/site-ai-pack), and its robots gains AI directives
+#   · the site's llms-full.txt (deep content) serves once generated and
+#     carries every page the index names — missing = skip, thin = FAIL
 #
 # Usage:
 #   bash acceptance.sh                 # the production hosts (blueprint domains)
@@ -469,6 +471,7 @@ check_site() {
     else
       ok 'site llms.txt (AI index)' "$(printf '%s' "$b" | grep -c '^## ') sections"
       check_index_paths "$base" "$b"
+      check_llms_full "$base" "$b"
     fi
   else
     skip 'site llms.txt (AI index)' "$c — apply deploy/site-ai-pack/ (the site repo is now identified)"
@@ -603,6 +606,51 @@ check_site_sitemap() {
     bad 'site sitemap.xml pages resolve' "$dead of $total dead (first: $first)"
   else
     ok 'site sitemap.xml pages resolve' "$total urls resolve"
+  fi
+}
+
+check_llms_full() {
+  # The deep-content companion to llms.txt (the file the hub's own
+  # AI-visibility tool scores). Absent = a named skip naming the generator;
+  # present = it must be full, in the one way that is checkable from outside:
+  # every page the index links must have its section here. A deep-content
+  # file that quietly drops pages is a thinner site dressed as a richer one.
+  local base="${1%/}" index="$2" c b paths path total=0 miss=0 first=""
+  c=$(get_code "$base/llms-full.txt")
+  b=$(get_body "$base/llms-full.txt")
+  if [ "$c" != 200 ]; then
+    skip 'site llms-full.txt (deep content)' "$c — generate it: deploy/site-ai-pack/site-llms.mjs --site <repo> --write"
+    return
+  fi
+  if ! printf '%s' "$b" | head -1 | grep -q '^# '; then
+    bad 'site llms-full.txt (deep content)' 'served but no title line'
+    return
+  fi
+  if ! printf '%s' "$b" | grep -q '^### '; then
+    bad 'site llms-full.txt (deep content)' 'served but no page sections'
+    return
+  fi
+  paths=$(printf '%s' "$index" \
+    | grep -oE '\]\(https?://[^)]+\)' \
+    | sed -E 's/^\]\(//; s/\)$//' \
+    | sed -E 's#^[a-z]+://[^/]+##' \
+    | sed -E 's/[?#].*$//' \
+    | sort -u)
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    case "$path" in /sitemap.xml|/llms.txt|/llms-full.txt) continue ;; esac
+    total=$((total + 1))
+    if ! printf '%s' "$b" | grep -qF -- "$path"; then
+      miss=$((miss + 1))
+      [ -z "$first" ] && first="$path"
+    fi
+  done <<< "$paths"
+  if [ "$total" -eq 0 ]; then
+    skip 'site llms-full.txt (deep content)' 'the index names no pages — nothing for it to carry'
+  elif [ "$miss" -gt 0 ]; then
+    bad 'site llms-full.txt (deep content)' "$miss of $total of the index's pages missing, first: $first"
+  else
+    ok 'site llms-full.txt (deep content)' "all $total of the index's pages carried"
   fi
 }
 

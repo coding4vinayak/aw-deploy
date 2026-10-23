@@ -2203,4 +2203,200 @@ if (q24("SELECT 1") !== "1") {
   await fetch(`${API}/webhooks/${sub24.id}`, { method: "DELETE", headers: H });
 }
 
+log("\n═══ STEP 25 — a dynamic list re-runs the filter it declares, and the crowd it names becomes the membership (#44) ═══");
+// `LeadList` has carried two columns since its first migration — `isDynamic Boolean @default(false)`
+// and `filterJson Json? // Filter criteria for dynamic lists` — and both were sold by the create and
+// edit doors. Nothing read either one. The single door that could act on them answered, measured on
+// the running app before this round:
+//
+//   POST /api/lead-lists/{id}?action=refresh {isDynamic:true}
+//     -> 200 {"ok":true,"message":"Dynamic list refresh not fully implemented"}
+//
+// with the membership unchanged on both sides of it, a `?action=refresh` *without* the flag a
+// `400 "Unknown action"` (the branch obeyed the caller's body, not the row), and
+// `filterJson: { a: 1 }`, `filterJson: []` and `filterJson: 42` all stored as 201.
+const q25 = (sql) => psql18(sql, true)?.trim();
+const dbOk25 = q25("SELECT 1") === "1";
+const TAG25 = `dyn44-${RUN}`;
+const crowd25 = [];
+const lists25 = [];
+const answers25 = [];
+const getJson25 = async (id) => {
+  const res = await fetch(`${API}/lead-lists/${id}`, { headers: H });
+  return { http: res.status, body: await res.json().catch(() => ({})) };
+};
+const memberRows25 = async (id) => (q25(`SELECT string_agg("leadId", ',' ORDER BY "leadId") FROM "LeadListMember" WHERE "listId"='${id}'`) ?? "").split(",").filter(Boolean);
+const refresh25 = async (id, label, body) => {
+  const res = await fetch(`${API}/lead-lists/${id}?action=refresh`, { method: "POST", headers: H, body: JSON.stringify(body ?? {}) });
+  const text = await res.text();
+  let json = {};
+  try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  if (typeof json.matched === "number") answers25.push({ label, ...json });
+  log(`  refresh ${label} -> ${res.status} ${text.slice(0, 150)}`);
+  return { http: res.status, ...json };
+};
+const nameIds25 = (where) => (q25(`SELECT string_agg(id, ',' ORDER BY id) FROM "Lead" WHERE ${where} AND tags @> '["${TAG25}"]'::jsonb`) ?? "").split(",").filter(Boolean);
+const createList25 = async (label, body) => {
+  const res = await fetch(`${API}/lead-lists`, { method: "POST", headers: H, body: JSON.stringify(body) });
+  const text = await res.text();
+  let json = {};
+  try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  log(`  POST /lead-lists ${label} -> ${res.status} ${text.slice(0, 150)}`);
+  return { http: res.status, ...json };
+};
+
+if (!dbOk25) {
+  log("  psql is unreachable here, so this step cannot name the crowd it is about to claim, and is skipped rather than passed.");
+} else {
+  const listsBefore25 = q25(`SELECT count(*) FROM "LeadList"`);
+  const membersBefore25 = q25(`SELECT count(*) FROM "LeadListMember"`);
+
+  // The crowd: six leads the step owns, three of them moved to QUALIFIED through the lead's own
+  // door (`POST /api/leads` always makes a NEW row), two of them C_LEVEL. A tag nobody else in the
+  // workspace holds makes every number below the step's own, so `matched` is checkable against the
+  // table rather than against whatever the seed happened to leave behind.
+  for (let i = 0; i < 6; i++) {
+    const made = await (await fetch(`${API}/leads`, {
+      method: "POST", headers: H,
+      body: JSON.stringify({
+        firstName: `Dynamic ${i}`, lastName: "Crowd", email: `${TAG25}.${i}@crowd.test`,
+        company: "Dynamic Estates", title: i < 2 ? "Founder & CEO" : "VP Sales",
+        seniority: i < 2 ? "C_LEVEL" : "VP", tags: [TAG25],
+      }),
+    })).json();
+    if (made.id) crowd25.push(made.id);
+  }
+  check(crowd25.length === 6, `the crowd is six leads the intake door wrote (got ${crowd25.length})`);
+  for (const id of [crowd25[3], crowd25[4], crowd25[5]]) {
+    const moved = await fetch(`${API}/leads/${id}`, { method: "PATCH", headers: H, body: JSON.stringify({ status: "QUALIFIED" }) });
+    check(moved.status === 200, `PATCH /leads/${id.slice(-4)} status QUALIFIED -> ${moved.status}`);
+  }
+  const qualified25 = q25(`SELECT count(*) FROM "Lead" WHERE status='QUALIFIED' AND tags @> '["${TAG25}"]'::jsonb`);
+  const cLevel25 = q25(`SELECT count(*) FROM "Lead" WHERE "seniority"='C_LEVEL' AND tags @> '["${TAG25}"]'::jsonb`);
+  log(`     the table says ${qualified25} of the crowd is QUALIFIED and ${cLevel25} is C_LEVEL — every number this step prints is checked against that`);
+
+  // A door sells a column, so it has to refuse what the column can never run.
+  const refusals25 = [
+    ["{isDynamic:true} alone", { name: `refuse44-flag-${TAG25}`, isDynamic: true }],
+    ["a key no Lead column holds", { name: `refuse44-key-${TAG25}`, isDynamic: true, filterJson: { department: "Ops" } }],
+    ["filterJson []", { name: `refuse44-array-${TAG25}`, isDynamic: true, filterJson: [] }],
+    ["filterJson 42", { name: `refuse44-number-${TAG25}`, isDynamic: true, filterJson: 42 }],
+  ];
+  for (const [label, body] of refusals25) {
+    const refused = await createList25(label, body);
+    check(refused.http === 400 && typeof refused.error === "string", `${label} is refused with a sentence, not stored as 201`);
+  }
+  const storedJunk25 = q25(`SELECT count(*) FROM "LeadList" WHERE name LIKE 'refuse44-%'`);
+  check(storedJunk25 === "0", `and none of the four left a row: ${storedJunk25} lists named refuse44-* in the table`);
+  const flagSentence25 = await createList25("the flag's own sentence", { name: `refuse44-flag2-${TAG25}`, isDynamic: true });
+  check(/declares the filter it re-runs/.test(String(flagSentence25.error)), "the refusal says what a dynamic list owes: the filter it will re-run");
+
+  const listA25 = await createList25("a real filter", { name: `dyn44-A-${TAG25}`, isDynamic: true, filterJson: { status: ["QUALIFIED"], tags: [TAG25] } });
+  lists25.push(listA25.id);
+  check(listA25.http === 201 && String(listA25.filterJson?.status) === "QUALIFIED" && String(listA25.filterJson?.tags) === TAG25,
+    "the stored filter is the normalized one: a scalar becomes the array the reader walks");
+
+  const fresh25 = await getJson25(listA25.id);
+  log(`  GET before any refresh -> ${fresh25.http} members=${(fresh25.body.members ?? []).length}`);
+  check((fresh25.body.members ?? []).length === 0, "a list that declares a crowd holds none of it until the door re-runs the filter");
+
+  const first25 = await refresh25(listA25.id, "#1 (the crowd as it stands)");
+  const firstRows25 = await memberRows25(listA25.id);
+  const qualifiedIds25 = nameIds25(`status='QUALIFIED'`);
+  log(`     the table holds ${firstRows25.length} rows; the filter's own words name ${qualifiedIds25.length} leads`);
+  check(first25.http === 200 && first25.matched === qualifiedIds25.length && first25.added === qualifiedIds25.length && first25.removed === 0 && first25.kept === 0,
+    `the answer is the crowd's arithmetic: matched=${first25.matched} added=${first25.added} removed=${first25.removed} kept=${first25.kept}`);
+  check(String(firstRows25) === String(qualifiedIds25), "and the ids in the table are the ids the filter names, row for row");
+  check(/status QUALIFIED, tagged/.test(String(first25.filter)), `the answer quotes the filter it ran: "${first25.filter}"`);
+
+  const second25 = await refresh25(listA25.id, "#2 (crowd unmoved)");
+  check(second25.matched === qualifiedIds25.length && second25.added === 0 && second25.removed === 0 && second25.kept === qualifiedIds25.length,
+    `the same filter over the same crowd is a no-op: added=${second25.added} removed=${second25.removed} kept=${second25.kept}`);
+
+  const handAdd25 = await fetch(`${API}/lead-lists/${listA25.id}?action=add-leads`, { method: "POST", headers: H, body: JSON.stringify({ leadIds: [crowd25[0]] }) });
+  const midRows25 = await memberRows25(listA25.id);
+  log(`  POST ?action=add-leads a NEW lead the filter does not name -> ${handAdd25.status}; the table now holds ${midRows25.length} rows`);
+  check(midRows25.length === qualifiedIds25.length + 1, "an operator can still put a lead in by hand — the add door does not police a dynamic list");
+  const third25 = await refresh25(listA25.id, "#3 (a hand-added member)");
+  check(third25.removed === 1 && third25.kept === qualifiedIds25.length && String(await memberRows25(listA25.id)) === String(qualifiedIds25),
+    `the refresh is the authority for a dynamic list: it took the hand-added row back (removed=${third25.removed}) and kept the crowd it names`);
+
+  await fetch(`${API}/leads/${crowd25[0]}`, { method: "PATCH", headers: H, body: JSON.stringify({ status: "QUALIFIED" }) });
+  await fetch(`${API}/leads/${crowd25[3]}`, { method: "PATCH", headers: H, body: JSON.stringify({ status: "CONTACTED" }) });
+  const movedIds25 = nameIds25(`status='QUALIFIED'`);
+  const fourth25 = await refresh25(listA25.id, "#4 (one lead in, one out)");
+  const fourthRows25 = await memberRows25(listA25.id);
+  check(fourth25.added === 1 && fourth25.removed === 1 && fourth25.kept === qualifiedIds25.length - 1 && String(fourthRows25) === String(movedIds25),
+    `the list follows the crowd both ways: added=${fourth25.added} removed=${fourth25.removed} kept=${fourth25.kept}, and the rows are the ${movedIds25.length} the filter names now`);
+
+  const fifth25 = await refresh25(listA25.id, "#5 (again, unmoved)");
+  check(fifth25.added === 0 && fifth25.removed === 0 && fifth25.kept === movedIds25.length, "and it settles: the crowd has not moved, so nothing is written");
+
+  // A second list, filtering the same crowd by a different attribute, with the filter written as a
+  // scalar. Two lists over one workspace hold their own memberships: neither refresh touches the other.
+  const listB25 = await createList25("seniority as a scalar", { name: `dyn44-B-${TAG25}`, isDynamic: true, filterJson: { seniority: "c_level", tags: [TAG25] } });
+  lists25.push(listB25.id);
+  const bFirst25 = await refresh25(listB25.id, "B#1 (seniority, not status)");
+  const cLevelIds25 = nameIds25(`"seniority"='C_LEVEL'`);
+  check(bFirst25.matched === cLevelIds25.length && String(await memberRows25(listB25.id)) === String(cLevelIds25),
+    `a filter on a different attribute selects a different crowd — ${bFirst25.matched} C_LEVEL leads — through the same reader`);
+  const aAfterB25 = await memberRows25(listA25.id);
+  check(String(aAfterB25) === String(movedIds25), `and B's refresh did not move A's ${aAfterB25.length} rows: membership is per list`);
+
+  const patchB25 = await fetch(`${API}/lead-lists/${listB25.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ filterJson: { status: "QUALIFIED", tags: [TAG25] } }) });
+  const patchedB25 = await patchB25.json();
+  log(`  PATCH the filter on a live dynamic list -> ${patchB25.status} filterJson=${JSON.stringify(patchedB25.filterJson)}`);
+  check(patchB25.status === 200 && String(patchedB25.filterJson?.status) === "QUALIFIED", "the edit door stores the normalized filter it was handed");
+  const bSecond25 = await refresh25(listB25.id, "B#2 (after the PATCH)");
+  const bRows25 = await memberRows25(listB25.id);
+  check(bSecond25.matched === movedIds25.length && String(bRows25) === String(movedIds25),
+    `the row re-runs the filter it now holds, not the one it was made with: matched=${bSecond25.matched} added=${bSecond25.added} removed=${bSecond25.removed} kept=${bSecond25.kept}`);
+
+  for (const a of answers25) {
+    check(a.matched === a.kept + a.added && a.members === a.matched,
+      `the arithmetic of "${a.label}" closes: matched ${a.matched} = kept ${a.kept} + added ${a.added}, and the answer's member count is the crowd size`);
+  }
+
+  // The static list: the flag is a column, so typing it in the body cannot make a row dynamic.
+  const listC25 = await createList25("a static list", { name: `dyn44-C-${TAG25}`, isDynamic: false });
+  lists25.push(listC25.id);
+  check(listC25.http === 201 && listC25.isDynamic === false && listC25.filterJson === null, "a static list is stored as one: false, and no filter");
+  const obeyBody25 = await refresh25(listC25.id, "C (static, told to be dynamic by the body)", { isDynamic: true });
+  const plainStatic25 = await refresh25(listC25.id, "C (static, no body)", {});
+  check(obeyBody25.http === 400 && plainStatic25.http === 400 && obeyBody25.error === plainStatic25.error,
+    "the same 400 either way: the branch asks the row, and the caller's flag is not a column");
+  check(/isDynamic.*false/.test(String(obeyBody25.error)) && /operator/.test(String(obeyBody25.error)),
+    "and it says whose members they are — an operator's, not a filter's");
+  const flagOnlyPatch25 = await (await fetch(`${API}/lead-lists/${listC25.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ isDynamic: true }) })).json();
+  log(`  PATCH {isDynamic:true} onto a filterless row -> 400 ${String(flagOnlyPatch25.error).slice(0, 120)}`);
+  check(/declares no filter/.test(String(flagOnlyPatch25.error)), "the edit door refuses to make a list dynamic with nothing to re-run, so no row can be made un-refreshable");
+
+  // Two rows the create and edit doors will not make, written straight to the column, to show the
+  // refresh door reads what is stored rather than trusting that it was written through itself.
+  const junked25 = q25(`WITH u AS (UPDATE "LeadList" SET "isDynamic"=true, "filterJson"='{"department":"Ops"}'::jsonb WHERE id='${listC25.id}' RETURNING 1) SELECT count(*) FROM u`);
+  log(`  the column forced by SQL (a row no door would write): isDynamic=true, filterJson={"department":"Ops"}, ${junked25} row updated`);
+  const junkRefresh25 = await refresh25(listC25.id, "C (a stored filter no lead can be)");
+  check(junkRefresh25.http === 409 && /cannot be re-run as written/.test(String(junkRefresh25.error)) && /department/.test(String(junkRefresh25.error)),
+    "a filter the column holds but no lead can be is a 409 quoting the row's own state, not a 200 claiming a refresh");
+  const nulled25 = q25(`WITH u AS (UPDATE "LeadList" SET "filterJson"=NULL WHERE id='${listC25.id}' RETURNING 1) SELECT count(*) FROM u`);
+  log(`  the same row with the column emptied by SQL, ${nulled25} row updated`);
+  const emptyRefresh25 = await refresh25(listC25.id, "C (dynamic, column empty)");
+  check(emptyRefresh25.http === 409 && /declares no filter to re-run/.test(String(emptyRefresh25.error)),
+    "and a dynamic row whose column is empty is refused the same way, for the other reason");
+  const refusedRows25 = await memberRows25(listC25.id);
+  check(refusedRows25.length === 0, "neither refusal wrote a member: the 409 is the whole answer");
+
+  log("  what this step does not claim: nothing re-runs by itself. A lead's status moving does not touch a list until someone posts the refresh door — there is no trigger, no scheduler entry and no queue message for it, and `GET /api/lead-lists/{id}` lists at most 100 members whatever the table holds.");
+  log("  left alone on purpose: the filter vocabulary is the rule's (`status`, `seniority`, `score`, `tags`), so a list borrows the reader a rule already had rather than a second grammar that can drift; and a static list keeps its hand-made membership — this round only made `isDynamic` mean something when it is true.");
+
+  for (const id of lists25) await fetch(`${API}/lead-lists/${id}`, { method: "DELETE", headers: H });
+  for (const id of crowd25) await fetch(`${API}/leads/${id}`, { method: "DELETE", headers: H });
+  const listsLeft25 = q25(`SELECT count(*) FROM "LeadList"`);
+  const membersLeft25 = q25(`SELECT count(*) FROM "LeadListMember"`);
+  const crowdLeft25 = q25(`SELECT count(*) FROM "Lead" WHERE tags @> '["${TAG25}"]'::jsonb`);
+  log(`  cleanup: ${lists25.length} lists and ${crowd25.length} crowd leads deleted through the doors`);
+  check(listsLeft25 === listsBefore25 && membersLeft25 === membersBefore25 && crowdLeft25 === "0",
+    `the workspace is back to where the step found it: ${listsBefore25} → ${listsLeft25} lists, ${membersBefore25} → ${membersLeft25} memberships, ${crowdLeft25} crowd leads left`);
+}
+
 await capture.close();

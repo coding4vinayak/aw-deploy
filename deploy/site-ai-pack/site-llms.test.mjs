@@ -8,9 +8,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildLlmsFullTxt,
   buildLlmsTxt,
   buildRobotsTxt,
   buildSitemapXml,
+  extractMainText,
   extractTitle,
   labelFromPath,
   parseManifest,
@@ -124,4 +126,90 @@ test("robots carries the AI assistants and points at the index", () => {
   assert.ok(robots.includes("https://abetworks.in/llms.txt"));
   assert.ok(robots.includes("Sitemap: https://abetworks.in/sitemap.xml"));
   assert.ok(robots.includes("User-Agent: *"), "the allow-list stays");
+});
+
+// ── The deep-content file ───────────────────────────────────────────────────
+
+test("a page's text is its prose: furniture dropped, structure kept, entities decoded once", () => {
+  const html = `<!doctype html>
+<html><head><title>Pricing - Abet Works</title>
+<style>.nav{color:red}</style></head>
+<body>
+<header><nav><a href="/">Home</a> <a href="/contact.html">Contact</a></nav></header>
+<script>window.tracking = true;</script>
+<main>
+<h1>Pricing</h1>
+<p>Every engagement &amp; scope is quoted, from <b>₹</b> analytics to AI&nbsp;builds.</p>
+<p>Second &lt;paragraph&gt; with an &mdash; entity.</p>
+</main>
+<footer><p>© 2026 Abet Works</p></footer>
+</body></html>`;
+  const text = extractMainText(html);
+  assert.ok(text.startsWith("Pricing\n"), "the h1 opens the text, as its own line");
+  assert.ok(text.includes("Every engagement & scope is quoted, from ₹ analytics to AI builds."), "tags strip, entities decode");
+  assert.ok(text.includes("Second <paragraph> with an — entity."), "structural entities decode, &amp; only once");
+  assert.ok(!text.includes("window.tracking"), "script does not become prose");
+  assert.ok(!text.includes(".nav{color:red}"), "style does not become prose");
+  assert.ok(!text.includes("Home") && !text.includes("Contact"), "the nav is furniture, not content");
+  assert.ok(!text.includes("© 2026"), "the footer is furniture, not content");
+});
+
+test("a page without <main> keeps its body less the furniture", () => {
+  const html = `<html><body><header><h2>Abet Works</h2></header>
+<section><p>The service in one paragraph.</p><ul><li>Point one</li><li>Point two</li></ul></section>
+<aside>Newsletter</aside></body></html>`;
+  const text = extractMainText(html);
+  assert.equal(text, "The service in one paragraph.\nPoint one\nPoint two", "blocks separate, lists keep their points");
+  assert.ok(!text.includes("Newsletter"), "aside is furniture too");
+});
+
+test("the deep-content file carries each reviewed page as its own section, with the page's real body", () => {
+  const pages = [
+    { path: "/", label: "Abet Works", title: "Abet Works", text: "We build data and AI systems.\nStatic line." },
+    { path: "/services/ai.html", label: "Artificial Intelligence", title: "AI Services", text: "What we build, and how it is delivered." },
+  ];
+  const text = buildLlmsFullTxt({
+    origin: "https://abetworks.in",
+    siteName: "Abet Works",
+    summary: "A services company.",
+    groups: [{ title: "Start here", pages: [pages[0]] }, { title: "Services", pages: [pages[1]] }],
+    hosts: [{ url: "https://hub.abetworks.in/", host: "hub.abetworks.in" }],
+  });
+
+  for (const p of pages) {
+    assert.ok(text.includes(`### ${p.label} — https://abetworks.in${p.path}`), `${p.path} has its own section`);
+    assert.ok(text.includes(p.text), `${p.path}'s body is carried`);
+  }
+  assert.ok(!text.includes("Page title: “Abet Works”."), "a title identical to the label is not repeated");
+  assert.ok(text.includes("Page title: “AI Services”."), "a page's own title is named");
+  assert.ok(text.includes("## Start here") && text.includes("## Services"), "the index's grouping is kept");
+  assert.ok(text.includes("https://hub.abetworks.in/"), "the product hosts are listed");
+  assert.ok(text.includes("https://abetworks.in/llms-full.txt"), "the file names itself");
+});
+
+test("a page whose body could not be read is named, not invented", () => {
+  const text = buildLlmsFullTxt({
+    origin: "https://abetworks.in",
+    siteName: "Abet Works",
+    summary: "A services company.",
+    groups: [{ title: "Services", pages: [{ path: "/services/x.html", label: "x", title: null, text: null }] }],
+    hosts: [],
+  });
+  assert.ok(
+    text.includes("(its body is empty or unreadable in the repository — read it at https://abetworks.in/services/x.html)"),
+    "the thin page says so out loud",
+  );
+  assert.ok(text.includes("## Services"), "the group still exists");
+});
+
+test("the index points at its companion only when the companion ships with it", () => {
+  const base = {
+    origin: "https://abetworks.in",
+    siteName: "Abet Works",
+    summary: "A services company.",
+    groups: [{ title: "Start here", pages: [{ path: "/", label: "Abet Works", title: null, text: "x" }] }],
+    hosts: [],
+  };
+  assert.ok(!buildLlmsTxt(base).includes("llms-full.txt"), "without the companion, no pointer — no dead link");
+  assert.ok(buildLlmsTxt({ ...base, full: true }).includes("Full content: https://abetworks.in/llms-full.txt"));
 });

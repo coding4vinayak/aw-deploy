@@ -75,6 +75,16 @@ if [ -f next.config.ts ] || [ -f next.config.js ] || [ -f next.config.mjs ] || [
     echo "      product pages and re-run."
   fi
 
+  # The deep-content file: the pack generates it from a site's own page
+  # bodies, which only works where the pages are HTML files (the static
+  # branch below). A Next app's bodies are compiled routes — not readable
+  # from the repo here — so nothing is written for one, and the index copied
+  # above carries no pointer to a full-content file this site would not serve.
+  echo "NOTE: llms-full.txt is not installed for a Next.js site (its page bodies are not"
+  echo "      readable from the repo here, so a full file could not be generated — only"
+  echo "      invented). The suite's deep content already lives on hub.abetworks.in, which"
+  echo "      serves its own llms-full.txt."
+
   # The OpenAPI contract: the gateway's **live** one when it can be reached,
   # the pack's copy otherwise. The copy went stale once already — two versions
   # behind, and missing the NuCRM inbound bridge, which is the one endpoint

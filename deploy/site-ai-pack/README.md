@@ -84,12 +84,15 @@ off `origin/main` (**never** commits on main), detects Next.js vs static, and
 prints the diff; pushing is opt-in.
 
 - **Static site** → the index is generated from the site (`llms.txt`,
-  `robots.txt`, a rebuilt `sitemap.xml`), and the generator's verification
-  runs before anything is written.
+  `llms-full.txt`, `robots.txt`, a rebuilt `sitemap.xml`), and the generator's
+  verification runs before anything is written.
 - **Next.js site** → the static files go in `public/`, plus the OpenAPI
   contract, and if `robots` is a **route** (`app/robots.ts`) the AI block is
   left at `SITE-AI-PACK-robots.md` to merge by hand rather than writing a
-  dead `public/robots.txt`.
+  dead `public/robots.txt`. No `llms-full.txt` is written here — a Next app's
+  page bodies are compiled routes, not readable from the repo, and the index
+  it copies carries no pointer that would 404 (the suite's deep content
+  already lives on `hub.abetworks.in`).
 
 `SITE_ORIGIN` overrides the origin the index is written against
 (default `https://abetworks.in`).
@@ -123,11 +126,32 @@ And the acceptance sweep checks the contract that **landed** on the site
 against the contract the gateway is serving — the same paths on both sides, or
 the sweep says which one is missing.
 
+## The deep-content file
+
+`llms-full.txt` is the companion engines pull when they want the whole
+substance in one fetch — the file type the hub's own AI-visibility tool scores
+(+4 points). It is **generated from the site's own pages**, so it can never say
+more than the site does: one section per reviewed page, the page's own
+`<title>` named, and the page's prose extracted from its HTML — with the
+`header` / `nav` / `footer` / `aside` furniture dropped (repeating the nav on
+every page is noise priced as depth) and the common entities decoded once.
+
+A page whose body comes back empty is **named as thin in the file itself**
+("its body is empty or unreadable in the repository — read it at …") rather
+than padded with invention — the same honesty rule the index follows. The
+index copies a pointer to it only when the pair is written together, so no
+site can serve an index advertising a full file it does not have.
+
+The acceptance sweep grades it live (`site llms-full.txt (deep content)`):
+missing → a named skip, served-but-thin → a FAIL naming the dropped page.
+
 ## Verify after deploy (the acceptance-style one-liners)
 
 ```sh
 curl -s -o /dev/null -w '%{http_code}\n' https://abetworks.in/llms.txt          # 200
 curl -s https://abetworks.in/llms.txt | grep -q '## Services'                   # index intact
+curl -s -o /dev/null -w '%{http_code}\n' https://abetworks.in/llms-full.txt     # 200 (of the sites that generate it)
+curl -s https://abetworks.in/llms-full.txt | grep -c '^### '                    # one section per reviewed page
 curl -s https://abetworks.in/robots.txt | grep -E 'GPTBot|llms.txt'             # AI block live
 curl -s https://abetworks.in/sitemap.xml | grep -c '<loc>'                      # 26
 # every URL the sitemap names must resolve — this is the check that was
@@ -178,9 +202,12 @@ card that shows another company's office is a lie about who you are.
 node --test deploy/site-ai-pack/*.test.mjs
 ```
 
-They pin the rules that keep the index and the share layer honest: a manifest
-page the site does not have is an error; the index links exactly the listed
-pages and the sitemap's hosts; the sitemap escapes the `&` in a filename;
+They pin the rules that keep the index, the deep-content file, and the share
+layer honest: a manifest page the site does not have is an error; the index
+links exactly the listed pages and the sitemap's hosts; the deep file carries
+each page's real body with the furniture dropped, entities decoded once, and a
+thin page named rather than invented; the index points at its companion only
+when the companion ships next to it; the sitemap escapes the `&` in a filename;
 robots names the AI assistants and points at the index; the page layer is
 **idempotent** (a second run produces the same bytes, and the old canonical
 and JSON-LD are replaced rather than doubled); the card is the company's own

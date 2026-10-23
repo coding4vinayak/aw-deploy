@@ -1958,4 +1958,249 @@ if (q23("SELECT 1") !== "1") {
   await fetch(`${API}/webhooks/${sub23.id}`, { method: "DELETE", headers: H });
 }
 
+log("\n═══ STEP 24 — a cancelled export stays cancelled: the record names no file, the bytes come back, and the row can be run again (#43) ═══");
+// #41 made `?action=cancel` true for the workers that read the mark and named the two that do
+// not. `lib/exporter.ts` was one of them, and measured against the running app before this
+// round its answer was worse than silence:
+//
+//   ?action=cancel on a queued EXPORT job -> 200 {"ok":true}
+//   +    97ms  Job[CANCELLED 0 0]   Export[COMPLETED /tmp/export_1792669709914.pdf 19]
+//   +   236ms  Job[COMPLETED 19 19] Export[COMPLETED /tmp/export_1792669709914.pdf 19]
+//
+// The door said `ok`, and the worker wrote over the answer twice — `RUNNING` when it took the
+// job, `COMPLETED` with the file's size, count and lifetime at the end. An export's indivisible
+// unit of work is the file, not a lead: the crowd is one query, rendered, written once. So a
+// stop here is "before the bytes" or "after the bytes", and the second shape leaves what the
+// row-wise workers never produce — bytes on a disk no row will ever name. Both shapes are
+// lived below on rows this application wrote, with the third half after them: a stopped export
+// is resumable, because the word its record is put down with is the word that door accepts.
+const q24 = (sql) => psql18(sql, true)?.trim();
+const FIELDS24 = ["email", "firstName", "lastName", "company", "title", "status", "score", "tags", "sourceId"];
+const STOPPED24 = "cancelled by the operator before the file was written";
+const CROWD24 = 12000;
+const readE24 = async (id) => (await (await fetch(`${API}/exports/${id}`, { headers: H })).json());
+const job24 = (id) => {
+  const raw = q24(`SELECT row_to_json(t) FROM (SELECT status, "totalItems", "processedItems", "failedItems", progress, "completedAt" FROM "Job" WHERE id='${id}') t`);
+  return raw ? JSON.parse(raw) : null;
+};
+// The read that happens immediately before the cancel goes out is the door's own, not a `psql`
+// spawn: a spawn costs ~1.2 s, and this step's aim is a fraction of a run that takes 4.2 s.
+const jobViaApi24 = async (id) => {
+  try { return await (await fetch(`${API}/jobs/${id}`, { headers: H })).json(); } catch { return null; }
+};
+/** Every artifact `/tmp` holds whose own name was stamped at or after `from`. */
+const born24 = (from) => readdirSync("/tmp")
+  .filter((f) => /^export_\d+\.(csv|json|xlsx|pdf)$/.test(f) && Number(/^export_(\d+)\./.exec(f)[1]) >= from)
+  .map((f) => `/tmp/${f}`);
+/**
+ * What #37's census asks: born in this step's window, present on the disk, named by no export row.
+ *
+ * "born and present" alone is not the question — an export that finished inside the window has a
+ * file on the disk that the step will delete through its own door a moment later, and counting it
+ * as residue would blame #43 for a run nobody stopped. `null` is the honest third answer: with the
+ * table unreadable, the count cannot be made, and this step says so instead of passing.
+ */
+const unclaimed24 = (from) => {
+  const namedRaw = psql18('SELECT "filePath" FROM "Export" WHERE "filePath" IS NOT NULL', true);
+  if (namedRaw === null) return null;
+  const named = new Set(namedRaw.split("\n").filter(Boolean));
+  return born24(from).filter((path) => existsSync(path) && !named.has(path));
+};
+const mk24 = async (format) => {
+  const res = await fetch(`${API}/exports`, {
+    method: "POST",
+    headers: H,
+    body: JSON.stringify({ format, fields: FIELDS24 }),
+  });
+  const body = await res.json();
+  return { http: res.status, ...body.export, jobId: body.jobId };
+};
+const settleE24 = async (id, maxMs) => {
+  const t = Date.now();
+  for (;;) {
+    const cur = await readE24(id);
+    if (cur.status === "COMPLETED" || cur.status === "FAILED") return cur;
+    if (Date.now() - t > maxMs) return { ...cur, timedOutAfterMs: maxMs };
+    await new Promise((r) => setTimeout(r, 15));
+  }
+};
+const exports24 = [];
+const jobs24 = [];
+const track24 = (e) => { exports24.push(e.id); jobs24.push(e.jobId); return e; };
+
+if (q24("SELECT 1") !== "1") {
+  log("  psql is unreachable here, so this step cannot count the crowd it stops and is skipped rather than passed.");
+} else {
+  const t24 = Date.now();
+  const where24 = `email LIKE 'stop43${RUN}.%'`;
+  for (let off = 0; off < CROWD24; off += 1000) {
+    const chunk = ["email,first name,company,title"];
+    for (let i = off; i < Math.min(off + 1000, CROWD24); i++) {
+      chunk.push(`stop43${RUN}.${i}@crowd.test,Crowd ${i},Stop Estates,Director of Sales ${i}`);
+    }
+    const res = await fetch(`${API}/leads/import`, { method: "POST", headers: csvHeaders, body: chunk.join("\n") });
+    if (!res.ok) { log(`  import chunk at ${off} -> ${res.status} ${(await res.text()).slice(0, 140)}`); break; }
+  }
+  const crowd24 = Number(q24(`SELECT count(*) FROM "Lead" WHERE ${where24}`) ?? "-1");
+  log(`  ${crowd24} leads imported for this step in ${Date.now() - t24} ms: an export renders every lead in the workspace, so its file takes long enough to write that a stop can land after the bytes have been`);
+  check(crowd24 === CROWD24, `the crowd this step stops its export over is the ${CROWD24} rows the import door wrote (${crowd24} there)`);
+
+  const sub24 = await (await fetch(`${API}/webhooks`, {
+    method: "POST", headers: H,
+    body: JSON.stringify({ url: `http://localhost:${HOOK_PORT}/leadworks-stop43-${RUN}`, events: ["export.completed"] }),
+  })).json();
+  const deliveries24 = (exportId) => capture.items.filter((h) => h.url.includes(`/leadworks-stop43-${RUN}`)
+    && String(JSON.parse(h.body).data?.exportId ?? "") === exportId).length;
+
+  // The run that is not stopped, so the numbers below have a denominator to be seen against.
+  const warmFrom = Date.now();
+  const warm24 = track24(await mk24("PDF"));
+  const warmDone = await settleE24(warm24.id, 90000);
+  const warmMs = Date.parse(warmDone.completedAt ?? new Date()) - warmFrom;
+  const crowdTotal24 = Number(warmDone.recordCount ?? -1);
+  log(`  an uninterrupted PDF export -> ${warmDone.status} in ${warmMs} ms: file=${warmDone.filePath} ${warmDone.fileSize} bytes rows=${warmDone.recordCount} expiresAt=${warmDone.expiresAt}`);
+  check(warmDone.status === "COMPLETED" && !!warmDone.filePath && existsSync(warmDone.filePath) && warmDone.fileSize > 0 && crowdTotal24 > CROWD24,
+    `the shape of a run nobody stopped: a file on disk, a row that names it, ${crowdTotal24} rows counted and ${warmDone.fileSize} bytes of size`);
+
+  // Stop one mid-run. The aim is a fraction of the run the same crowd just took, and the
+  // target is the whole stretch between the worker's first look at the mark and its finish —
+  // seconds wide on this box, not the millisecond the row-wise workers live in.
+  const stopMidRun = async (fraction) => {
+    const from = Date.now();
+    const e = track24(await mk24("PDF"));
+    const aim = Math.round(warmMs * fraction);
+    await new Promise((r) => setTimeout(r, Math.max(aim - (Date.now() - from), 0)));
+    const before = await jobViaApi24(e.jobId);
+    const res = await fetch(`${API}/jobs/${e.jobId}?action=cancel`, { method: "POST", headers: H });
+    const body = await res.json();
+    const atMs = Date.now() - from;
+    const after = await settleE24(e.id, 60000);
+    return { from, e, before, atMs, aim, http: res.status, body, after, job: job24(e.jobId) };
+  };
+  let mid24 = await stopMidRun(0.6);
+  if (mid24.http !== 200) {
+    log(`  the run was over ${mid24.atMs} ms in before the stop could land (${JSON.stringify(mid24.body)}), so the same export is stopped earlier`);
+    mid24 = await stopMidRun(0.42);
+  }
+  log(`  POST /api/jobs/{id}?action=cancel ${mid24.atMs} ms into a ~${warmMs} ms run (the row read ${mid24.before?.status}) -> ${mid24.http} ${JSON.stringify(mid24.body)}`);
+  check(mid24.http === 200 && mid24.body.ok === true && mid24.before?.status === "RUNNING",
+    "the stop is taken while its worker is between the crowd and the file, which is the window the export worker used to drive straight through");
+  const stopped24 = mid24.after;
+  const stoppedJob24 = mid24.job ?? {};
+  log(`  the export row after the stop -> ${JSON.stringify({ status: stopped24.status, filePath: stopped24.filePath, fileSize: stopped24.fileSize, recordCount: stopped24.recordCount, expiresAt: stopped24.expiresAt })} error="${stopped24.error}"`);
+  log(`  its job row after the stop  -> ${stoppedJob24.status} ${stoppedJob24.processedItems}+${stoppedJob24.failedItems} of ${stoppedJob24.totalItems}, progress=${stoppedJob24.progress}%`);
+  check(stopped24.status === "FAILED" && String(stopped24.error).startsWith(STOPPED24),
+    "the record keeps the operator's word as its own state, and quotes it as the reason, instead of being stamped for a file nobody asked for");
+  check(stopped24.filePath === null && stopped24.fileSize === null && stopped24.expiresAt === null && Number(stopped24.recordCount) === 0,
+    "and every fact about a file is written as nothing: the two writes that used to stamp `COMPLETED` with a path, a size, a count and a lifetime are the ones the mark refuses");
+  check(stoppedJob24.status === "CANCELLED" && Number(stoppedJob24.processedItems) === 0 && Number(stoppedJob24.totalItems) === crowdTotal24 && Number(stoppedJob24.progress) === 0,
+    `the job row keeps the mark and its arithmetic: 0 of ${crowdTotal24} reached, progress 0 — the denominator it was told to walk, none of the work`);
+
+  await new Promise((r) => setTimeout(r, 1200));
+  const stayed24 = await readE24(mid24.e.id);
+  const jobStayed24 = job24(mid24.e.jobId);
+  log(`  +1200 ms, the same two reads that measured the erasure: Job[${jobStayed24?.status} ${jobStayed24?.processedItems} ${jobStayed24?.totalItems}] Export[${stayed24.status} ${stayed24.filePath} ${stayed24.recordCount}]`);
+  check(stayed24.status === "FAILED" && jobStayed24?.status === "CANCELLED" && Number(stayed24.recordCount) === 0 && stayed24.completedAt === null,
+    "nothing wrote COMPLETED over it afterwards: the 139 ms in which the mark used to vanish is now just time");
+
+  await new Promise((r) => setTimeout(r, 400));
+  check(deliveries24(mid24.e.id) === 0,
+    `no export.completed on the wire for a run whose file its operator cancelled (${deliveries24(mid24.e.id)} deliveries) — the announcement is the last statement of a try block every stopped path returns out of`);
+
+  const dlStopped24 = await fetch(`${API}/exports/${mid24.e.id}/download`, { headers: H });
+  const dlStoppedBody24 = await dlStopped24.json().catch(() => ({}));
+  const urlStopped24 = await fetch(`${API}/exports/${mid24.e.id}?action=download`, { method: "POST", headers: H });
+  const urlStoppedBody24 = await urlStopped24.json().catch(() => ({}));
+  log(`  the two download doors on a stopped export: ${dlStopped24.status} ${JSON.stringify(dlStoppedBody24).slice(0, 80)}; ${urlStopped24.status} ${JSON.stringify(urlStoppedBody24).slice(0, 80)}`);
+  check(dlStopped24.status === 404 && urlStopped24.status === 404 && urlStoppedBody24.downloadUrl === undefined,
+    "neither hands out a URL to bytes that are not on the disk: nulling `filePath` is what makes the second door refuse rather than advertise");
+
+  const appLog24 = readRunLog();
+  const removalLine24 = appLog24 === null
+    ? undefined
+    : appLog24.split("\n").find((line) => line.includes(`Export ${mid24.e.id}: stopped run's file removed at`));
+  if (appLog24 === null) {
+    log("  the app's stdout is not readable from this script, so the worker's own removal line is not quoted — the residue count below is the proof.");
+  } else {
+    const removedPath24 = /removed at (\/tmp\/export_\d+\.(?:csv|json|xlsx|pdf))$/.exec(String(removalLine24))?.[1] ?? null;
+    log(`  the worker's line: ${removalLine24 ?? "(none naming this export)"}${removedPath24 ? `\n  and that path on the disk now: ${existsSync(removedPath24) ? "STILL THERE" : "gone"}` : ""}`);
+    check(!!removedPath24 && !existsSync(removedPath24),
+      "the run wrote a file, the mark outranked its own finish, and the bytes came back through the same guard the delete door asks — the worker says which path it took and it is not on the disk");
+  }
+  const residue24 = unclaimed24(mid24.from);
+  if (residue24 === null) {
+    log("  the table is unreadable here, so this attempt's files cannot be told from the ones a finished export names — the claim above about the reclaimed path stands on the worker's own line.");
+  } else {
+    log(`  files born since this attempt began that the disk still holds and no row names: ${residue24.length} (${residue24.join(" ") || "none"})`);
+    check(residue24.length === 0,
+      `nothing a stopped run wrote is left to the disk (${residue24.length} unclaimed of ${born24(mid24.from).length} born in the window): a stopped export leaves no bytes that no row will ever name`);
+  }
+
+  const retry24res = await fetch(`${API}/exports/${mid24.e.id}?action=retry`, { method: "POST", headers: H });
+  const retry24 = await retry24res.json();
+  log(`  POST /api/exports/{id}?action=retry on the stopped row -> ${retry24res.status} ${JSON.stringify(retry24)}`);
+  check(retry24res.status === 200 && typeof retry24.jobId === "string" && retry24.jobId !== mid24.e.jobId,
+    "the stopped export is resumable through the door that already existed: it accepts only FAILED, and FAILED is the word #43 writes");
+  const back24 = await settleE24(mid24.e.id, 90000);
+  log(`  the retry -> ${back24.status} file=${back24.filePath} ${back24.fileSize} bytes rows=${back24.recordCount} completedAt=${back24.completedAt} expiresAt=${back24.expiresAt}`);
+  check(back24.status === "COMPLETED" && !!back24.filePath && existsSync(back24.filePath)
+    && Number(back24.recordCount) === crowdTotal24 && statSync(back24.filePath).size === back24.fileSize
+    && Date.parse(back24.expiresAt) - Date.parse(back24.completedAt) === retMs,
+    `and the retry is an export: ${back24.recordCount} rows in ${back24.fileSize} bytes, a lifetime of exactly ${retMs} ms stamped by the write that named the file`);
+  const served24 = await fetch(`${API}/exports/${mid24.e.id}/download`, { headers: H });
+  const servedBytes24 = Buffer.from(await served24.arrayBuffer());
+  await new Promise((r) => setTimeout(r, 500));
+  check(served24.status === 200 && servedBytes24.length === back24.fileSize && deliveries24(mid24.e.id) === 1,
+    `the file the retry wrote is served (${served24.status}, ${servedBytes24.length} bytes) and announced exactly once (${deliveries24(mid24.e.id)} export.completed) — the stopped run made no such call`);
+
+  // The other shape: a stop that lands before the worker ever claims the job. Two exports fill
+  // the worker's two slots, so the third is provably queued when the cancel is fired.
+  const fillers24 = await Promise.all([track24(await mk24("CSV")), track24(await mk24("CSV"))]);
+  const queueFrom24 = Date.now();
+  const queued24 = track24(await mk24("CSV"));
+  const beforeQueue24 = await jobViaApi24(queued24.jobId);
+  const cancelQueue24 = await fetch(`${API}/jobs/${queued24.jobId}?action=cancel`, { method: "POST", headers: H });
+  const cancelQueueBody24 = await cancelQueue24.json();
+  const afterQueue24 = await settleE24(queued24.id, 90000);
+  const queuedJob24 = job24(queued24.jobId);
+  log(`  a third export, cancelled ${Date.now() - queueFrom24} ms after it was created while both slots were busy (its job read ${beforeQueue24?.status}) -> ${cancelQueue24.status} ${JSON.stringify(cancelQueueBody24)}`);
+  log(`  the queued export -> ${afterQueue24.status} file=${afterQueue24.filePath} rows=${afterQueue24.recordCount}; its job ${queuedJob24?.status} ${queuedJob24?.processedItems}+${queuedJob24?.failedItems} of ${queuedJob24?.totalItems}`);
+  check(beforeQueue24?.status === "PENDING" && afterQueue24.status === "FAILED" && String(afterQueue24.error).startsWith(STOPPED24) && Number(queuedJob24?.totalItems) === 0,
+    "the claim itself is refused: a row already marked never gets a RUNNING stamped over the mark, and its job says it walked nothing of a crowd it never counted");
+  // The two exports holding the worker's slots finish first: their files are legitimately on the
+  // disk until the delete door below takes them, and a residue count that ignored that would blame
+  // a stopped export for a run nobody stopped.
+  for (const filler of fillers24) await settleE24(filler.id, 90000);
+  const residueQueued24 = unclaimed24(queueFrom24);
+  if (residueQueued24 === null) {
+    log("  with the table unreadable the before-the-bytes shape cannot be counted — this export's own row is read above, and it names no file.");
+  } else {
+    log(`  files born since the queued export was created: ${born24(queueFrom24).length} on the disk, ${residueQueued24.length} of them named by no row (${residueQueued24.join(" ") || "none"}); its own export row names none`);
+    check(residueQueued24.length === 0 && deliveries24(queued24.id) === 0,
+      "the before-the-bytes shape leaves nothing to reclaim: the claim was refused, so no file was written and nothing was announced");
+  }
+  const delQueued24 = await fetch(`${API}/exports/${queued24.id}`, { method: "DELETE", headers: H });
+  const delQueuedBody24 = await delQueued24.json();
+  check(delQueued24.status === 200 && delQueuedBody24.file === "no file",
+    `and the door that deletes a row is told ${JSON.stringify(delQueuedBody24)} — for a stopped export there are no bytes to take, which is the answer #37's order can only give because #43 nulled the pointer`);
+
+  for (const id of exports24) await fetch(`${API}/exports/${id}`, { method: "DELETE", headers: H });
+  for (const id of jobs24) await fetch(`${API}/jobs/${id}`, { method: "DELETE", headers: H });
+  const goneLeads24 = q24(`WITH d AS (DELETE FROM "Lead" WHERE ${where24} RETURNING id) SELECT count(*) FROM d`);
+  const leftLeads24 = q24(`SELECT count(*) FROM "Lead" WHERE ${where24}`);
+  const leftExports24 = q24(`SELECT count(*) FROM "Export" WHERE id IN ('${exports24.join("','")}')`);
+  const leftJobs24 = q24(`SELECT count(*) FROM "Job" WHERE id IN ('${jobs24.join("','")}')`);
+  const residueStep24 = unclaimed24(t24);
+  if (residueStep24 === null) {
+    log("  and the step's own files cannot be recounted without the table; the door deleted every export row it tracked.");
+  } else {
+    log(`  cleanup: ${goneLeads24} leads deleted, ${exports24.length} exports and ${jobs24.length} jobs deleted through their doors, ${residueStep24.length} of this step's files left unclaimed on disk (${residueStep24.join(" ") || "none"})`);
+  }
+  check(Number(leftLeads24) === 0 && leftExports24 === "0" && leftJobs24 === "0"
+    && (residueStep24 === null || residueStep24.length === 0),
+    `the step leaves nothing behind: ${leftLeads24} crowd leads, ${leftExports24} export rows, ${leftJobs24} job rows and ${residueStep24 === null ? "?" : residueStep24.length} files`);
+  log("  left alone, still by name: `lib/scraper.ts` does not consult the mark, so a cancelled scrape still runs to its own end; and a stop that lands while the crowd query is open is only seen at the boundary after it, which is why the row's `totalItems` is the whole crowd with nothing processed.");
+  await fetch(`${API}/webhooks/${sub24.id}`, { method: "DELETE", headers: H });
+}
+
 await capture.close();

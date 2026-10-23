@@ -1989,22 +1989,57 @@ const jobViaApi24 = async (id) => {
   try { return await (await fetch(`${API}/jobs/${id}`, { headers: H })).json(); } catch { return null; }
 };
 /** Every artifact `/tmp` holds whose own name was stamped at or after `from`. */
-const born24 = (from) => readdirSync("/tmp")
-  .filter((f) => /^export_\d+\.(csv|json|xlsx|pdf)$/.test(f) && Number(/^export_(\d+)\./.exec(f)[1]) >= from)
+const born24 = (from, ext) => readdirSync("/tmp")
+  .filter((f) => /^export_\d+\.(csv|json|xlsx|pdf)$/.test(f)
+    && (ext === undefined || [ext].flat().some((e) => f.endsWith(`.${e}`)))
+    && Number(/^export_(\d+)\./.exec(f)[1]) >= from)
   .map((f) => `/tmp/${f}`);
+/** Every `Export` row's file, read through the same connection this step counts its crowd with. */
+const namedRows24 = () => {
+  const raw = psql18('SELECT "filePath" FROM "Export" WHERE "filePath" IS NOT NULL', true);
+  return raw === null ? null : new Set(raw.split("\n").filter(Boolean));
+};
 /**
- * What #37's census asks: born in this step's window, present on the disk, named by no export row.
+ * What #37's census asks: in the shape the stopped run was writing, born in this step's window,
+ * still on the disk, and named by no row — where "named by no row" means after the write that
+ * does the naming has had its chance to happen.
  *
- * "born and present" alone is not the question — an export that finished inside the window has a
- * file on the disk that the step will delete through its own door a moment later, and counting it
- * as residue would blame #43 for a run nobody stopped. `null` is the honest third answer: with the
- * table unreadable, the count cannot be made, and this step says so instead of passing.
+ * Three exclusions, each of them a rule this application already applies to itself:
+ *
+ * - **"born and present" alone is not the question.** An export that finished inside the window
+ *   has a file the step deletes through its own door a moment later, and blaming it would blame
+ *   #43 for a run nobody stopped.
+ * - **`/tmp` is one directory shared by every leadworks this box runs**, and a census keyed to a
+ *   wall clock cannot tell this instance's writer from a neighbour's. Only the extension the
+ *   stopped run writes is blamed: a stopped run can leave nothing but bytes of its own format.
+ * - **a path is built before the row that names it is stamped** — `IN_FLIGHT_GRACE_MS` in
+ *   `lib/export-retention.ts` is the landed answer, and a sweep that ignores it accuses an export
+ *   being born. So a candidate is re-read every 600 ms until a row names it, or the file is gone,
+ *   or the budget runs out: a leak is still caught, twelve seconds later than the sweep that
+ *   first saw it.
+ *
+ * `null` is the honest third answer: with the table unreadable the count cannot be made, and this
+ * step says so instead of passing.
  */
-const unclaimed24 = (from) => {
-  const namedRaw = psql18('SELECT "filePath" FROM "Export" WHERE "filePath" IS NOT NULL', true);
-  if (namedRaw === null) return null;
-  const named = new Set(namedRaw.split("\n").filter(Boolean));
-  return born24(from).filter((path) => existsSync(path) && !named.has(path));
+const unclaimed24 = async (from, ext, waitMs = 12000) => {
+  const born = born24(from, ext);
+  let named = namedRows24();
+  if (named === null) return null;
+  let pending = born.filter((path) => !named.has(path));
+  const told = [];
+  const until = Date.now() + waitMs;
+  while (pending.length > 0 && Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 600));
+    named = namedRows24();
+    if (named === null) return null;
+    const still = [];
+    for (const path of pending) {
+      if (named.has(path) || !existsSync(path)) told.push(path);
+      else still.push(path);
+    }
+    pending = still;
+  }
+  return { unclaimed: pending, born, told, siblings: born24(from).length - born.length };
 };
 const mk24 = async (format) => {
   const res = await fetch(`${API}/exports`, {
@@ -2127,13 +2162,14 @@ if (q24("SELECT 1") !== "1") {
     check(!!removedPath24 && !existsSync(removedPath24),
       "the run wrote a file, the mark outranked its own finish, and the bytes came back through the same guard the delete door asks — the worker says which path it took and it is not on the disk");
   }
-  const residue24 = unclaimed24(mid24.from);
+  const residue24 = await unclaimed24(mid24.from, "pdf");
   if (residue24 === null) {
     log("  the table is unreadable here, so this attempt's files cannot be told from the ones a finished export names — the claim above about the reclaimed path stands on the worker's own line.");
   } else {
-    log(`  files born since this attempt began that the disk still holds and no row names: ${residue24.length} (${residue24.join(" ") || "none"})`);
-    check(residue24.length === 0,
-      `nothing a stopped run wrote is left to the disk (${residue24.length} unclaimed of ${born24(mid24.from).length} born in the window): a stopped export leaves no bytes that no row will ever name`);
+    log(`  ${residue24.told.length} PDF${residue24.told.length === 1 ? "" : "s"} born while this attempt ran were named by no row at the first sweep and a row names them now, or the file is gone: ${residue24.told.join(" ") || "none"}`);
+    log(`  still unclaimed after the grace the app's own sweep applies: ${residue24.unclaimed.length} (${residue24.unclaimed.join(" ") || "none"}); ${residue24.siblings} born in the window in another format are not this attempt's to be blamed for`);
+    check(residue24.unclaimed.length === 0,
+      `nothing a stopped run wrote is left to the disk (${residue24.unclaimed.length} unclaimed of ${residue24.born.length} born in the window in the shape it writes, ${residue24.told.length} told by a later row): a stopped export leaves no bytes that no row will ever name`);
   }
 
   const retry24res = await fetch(`${API}/exports/${mid24.e.id}?action=retry`, { method: "POST", headers: H });
@@ -2171,12 +2207,12 @@ if (q24("SELECT 1") !== "1") {
   // disk until the delete door below takes them, and a residue count that ignored that would blame
   // a stopped export for a run nobody stopped.
   for (const filler of fillers24) await settleE24(filler.id, 90000);
-  const residueQueued24 = unclaimed24(queueFrom24);
+  const residueQueued24 = await unclaimed24(queueFrom24, "csv");
   if (residueQueued24 === null) {
     log("  with the table unreadable the before-the-bytes shape cannot be counted — this export's own row is read above, and it names no file.");
   } else {
-    log(`  files born since the queued export was created: ${born24(queueFrom24).length} on the disk, ${residueQueued24.length} of them named by no row (${residueQueued24.join(" ") || "none"}); its own export row names none`);
-    check(residueQueued24.length === 0 && deliveries24(queued24.id) === 0,
+    log(`  files born since the queued export was created: ${residueQueued24.born.length} in the shape it writes and ${residueQueued24.siblings} in another, ${residueQueued24.unclaimed.length} of the first still named by no row after the grace (${residueQueued24.unclaimed.join(" ") || "none"}, ${residueQueued24.told.length} named by a row by the second sweep); its own export row names none`);
+    check(residueQueued24.unclaimed.length === 0 && deliveries24(queued24.id) === 0,
       "the before-the-bytes shape leaves nothing to reclaim: the claim was refused, so no file was written and nothing was announced");
   }
   const delQueued24 = await fetch(`${API}/exports/${queued24.id}`, { method: "DELETE", headers: H });
@@ -2190,15 +2226,15 @@ if (q24("SELECT 1") !== "1") {
   const leftLeads24 = q24(`SELECT count(*) FROM "Lead" WHERE ${where24}`);
   const leftExports24 = q24(`SELECT count(*) FROM "Export" WHERE id IN ('${exports24.join("','")}')`);
   const leftJobs24 = q24(`SELECT count(*) FROM "Job" WHERE id IN ('${jobs24.join("','")}')`);
-  const residueStep24 = unclaimed24(t24);
+  const residueStep24 = await unclaimed24(t24, ["pdf", "csv"]);
   if (residueStep24 === null) {
     log("  and the step's own files cannot be recounted without the table; the door deleted every export row it tracked.");
   } else {
-    log(`  cleanup: ${goneLeads24} leads deleted, ${exports24.length} exports and ${jobs24.length} jobs deleted through their doors, ${residueStep24.length} of this step's files left unclaimed on disk (${residueStep24.join(" ") || "none"})`);
+    log(`  cleanup: ${goneLeads24} leads deleted, ${exports24.length} exports and ${jobs24.length} jobs deleted through their doors; of the ${residueStep24.born.length} files born in this step in a shape its stopped runs write, ${residueStep24.unclaimed.length} are unclaimed (${residueStep24.unclaimed.join(" ") || "none"}) and ${residueStep24.told.length} were named by a row, or gone, by the second sweep; ${residueStep24.siblings} born in another format are not this step's to blame`);
   }
   check(Number(leftLeads24) === 0 && leftExports24 === "0" && leftJobs24 === "0"
-    && (residueStep24 === null || residueStep24.length === 0),
-    `the step leaves nothing behind: ${leftLeads24} crowd leads, ${leftExports24} export rows, ${leftJobs24} job rows and ${residueStep24 === null ? "?" : residueStep24.length} files`);
+    && (residueStep24 === null || residueStep24.unclaimed.length === 0),
+    `the step leaves nothing behind: ${leftLeads24} crowd leads, ${leftExports24} export rows, ${leftJobs24} job rows and ${residueStep24 === null ? "?" : residueStep24.unclaimed.length} files`);
   log("  left alone, still by name: `lib/scraper.ts` does not consult the mark, so a cancelled scrape still runs to its own end; and a stop that lands while the crowd query is open is only seen at the boundary after it, which is why the row's `totalItems` is the whole crowd with nothing processed.");
   await fetch(`${API}/webhooks/${sub24.id}`, { method: "DELETE", headers: H });
 }

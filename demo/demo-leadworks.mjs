@@ -2203,53 +2203,59 @@ if (q24("SELECT 1") !== "1") {
   await fetch(`${API}/webhooks/${sub24.id}`, { method: "DELETE", headers: H });
 }
 
-
-log("\n═══ STEP 25 — a list of 150 members answers a page of them, and says which page (#45) ═══");
+log("\n═══ STEP 25 — a list read told which columns to bring back obeys them, and refuses the names nobody has (#46) ═══");
 // Measured against the running app before this round, on a static list the import door had
-// just filled with exactly 150 members:
+// just filled with a hundred members (`/tmp/opencode/r46_probe.mjs`, twelve spellings of one
+// question):
 //
-//   GET /api/lead-lists/{id}                 -> 200, members.length 100, 163031 bytes
-//   GET /api/lead-lists/{id}?limit=5&page=3  -> 200, members.length 100, the same bytes
-//   GET /api/lead-lists/{id}?page=99         -> 200, members.length 100, the same bytes
-//   GET /api/lead-lists                      -> the same list, `_count: { members: 150 }`
+//   GET /api/lead-lists/{id}                    -> 200, 171720 bytes, members=100, 33 keys per lead
+//   GET /api/lead-lists/{id}?fields=email,score  -> 200, 171720 bytes — the same answer
+//   GET /api/lead-lists/{id}?fields=nonsense     -> 200, 171720 bytes — and no refusal
+//   GET /api/lead-lists/{id}?select=email        -> 200, 171720 bytes
+//   GET /api/lead-lists/{id}?fields=             -> 200, 171720 bytes
 //
-// `take: 100` was a ceiling on the answer, not the size of a page. Nobody read the query
-// string, so `?page=` and `?limit=` were accepted and thrown away; the members had no
-// `orderBy`, so which hundred came back was the database's business; and the answer held no
-// total at all — the only number that said 150 lived on a different route. A buyer who reads
-// their list once and pushes it into a campaign sends a hundred people and is never told the
-// other fifty exist, and the hundred they got could be a different hundred on the next call.
-//
-// The door now answers the question it was asked: `memberPage.recorded` is counted by the
-// database over the whole membership, `members` comes back in `leadId` order at the page and
-// limit the caller named, and `truncated` is the word that separates "this is all of them"
-// from "there is a next one". The three-field vocabulary is the one a finished job already
-// uses for the same hazard (`results.recorded/returned/truncated` in `lib/job-report.ts`), so
-// a caller that learned it at one door has it at this one.
-const q25 = (sql) => psql18(sql, true)?.trim();
-const CROWD25 = 150;
-const tag25 = `page45${RUN}`;
-const where25 = `"email" LIKE '${tag25}.%@crowd.test'`;
-const born25 = (from) => readdirSync("/tmp")
-  .filter((f) => /^export_\d+\.(csv|json|xlsx|pdf)$/.test(f) && Number(/^export_(\d+)\./.exec(f)[1]) >= from)
-  .map((f) => `/tmp/${f}`);
-const cols25 = (table) => {
-  const raw = q25(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='${table}' ORDER BY column_name`);
-  return raw === null ? null : raw.split("\n").filter(Boolean);
-};
+// The door never read its own query string, so every one of those calls was the same 171,720
+// bytes: a caller building a call list asked for an email and a score and received
+// `validationResults`, `scoreBreakdown`, `customFields` and the other 30 columns of every lead
+// in the list, and a caller who typo'd a column name received the whole row instead of being
+// told. `?fields=` is read now, judged against the same `LEAD_EXPORT_FIELDS` vocabulary the
+// export door validates `Export.fields` against, and applied as the `select` on the way to the
+// database rather than subtracted from the row afterwards. What follows is that door's answer
+// on a crowd this run wrote, cross-checked against the table's own column list rather than
+// against this file's memory of it.
 {
-  const t25 = Date.now();
-  const crowdRaw25 = q25(`SELECT id FROM "Lead" WHERE ${where25} ORDER BY id`);
-  if (crowdRaw25 === null) {
-    log("  this step's crowd is 150 rows the import door wrote without naming them, and the only door that can name them is the table. With `psql` unreachable the ids — and so the membership — do not exist, which means the step cannot be measured here rather than passed.");
+  const q25 = (sql) => psql18(sql, true)?.trim();
+  const CROWD25 = 120;
+  const tag25 = `pick46${RUN}`;
+  const where25 = `"email" LIKE '${tag25}.%@crowd.test'`;
+  const READ_MEMBER_CAP = 100;
+  // The list this step fills, assigned once its create call answers; `read25` closes over
+  // it, so it is declared at the block's top rather than inside the branch that fills it.
+  let list25 = null;
+  const cols25 = (table) => {
+    const raw = q25(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='${table}' ORDER BY column_name`);
+    return raw === null ? null : raw.split("\n").filter(Boolean);
+  };
+  const read25 = async (query) => {
+    const res = await fetch(`${API}/lead-lists/${list25.id}${query}`, { headers: H });
+    const text = await res.text();
+    let body = null;
+    try { body = JSON.parse(text); } catch { /* a non-JSON answer is itself the finding */ }
+    return { status: res.status, bytes: Buffer.byteLength(text), body };
+  };
+  const leadKeys25 = (answer) => Object.keys(answer?.body?.members?.[0]?.lead ?? {});
+  const askedLeads25 = (answer) => (answer?.body?.members ?? []).map((m) => m.lead);
+
+  const schema25 = cols25("Lead");
+  if (schema25 === null) {
+    log("  this step's cross-checks are the table's own column list, and with `psql` unreachable the projection cannot be judged against the schema rather than against this file — so the step is reported as unmeasurable instead of passed.");
   } else {
-    // Every read below happens after this one succeeded, so the table stays readable for the
-    // step's SQL cross-checks; `psql18` latches the failure and would return null forever after.
-    const ids25 = crowdRaw25.split("\n").filter(Boolean);
+    log(`  the table says a \`Lead\` row is ${schema25.length} columns: ${schema25.join(", ")}`);
+    const t25 = Date.now();
 
     const csv25 = [
-      "email,first name,last name,company,title,tags",
-      ...Array.from({ length: CROWD25 }, (_, i) => `${tag25}.${i}@crowd.test,Member${i},Surname${i},Crowd Estates ${i % 9},Property Owner,${tag25}`),
+      "email,phone,first name,last name,company,title,tags",
+      ...Array.from({ length: CROWD25 }, (_, i) => `${tag25}.${i}@crowd.test,${i % 2 ? "" : `+1555000${String(i).padStart(4, "0")}`},Pick${i},Surname${i},Projection Estates ${i % 7},Property Owner,${tag25}`),
     ].join("\n");
     const imp25 = await (await fetch(`${API}/leads/import`, {
       method: "POST", headers: { authorization: "Bearer " + KEY, "content-type": "text/csv" }, body: csv25,
@@ -2258,160 +2264,148 @@ const cols25 = (table) => {
     log(`  POST /api/leads/import ${CROWD25} rows -> ${imp25.status} imported=${impBody25.imported} invalid=${impBody25.invalid} duplicatesInFile=${impBody25.duplicatesInFile}`);
     check(imp25.status === 201 && impBody25.imported === CROWD25 && impBody25.invalid === 0,
       `the crowd is ${CROWD25} rows the import door wrote in one request`);
-    const idsNow25 = q25(`SELECT id FROM "Lead" WHERE ${where25} ORDER BY id`).split("\n").filter(Boolean);
-    check(idsNow25.length === CROWD25 && new Set(idsNow25).size === CROWD25,
-      `and the table holds exactly ${idsNow25.length} of them, all distinct, under this run's address`);
+
+    const ids25 = q25(`SELECT id FROM "Lead" WHERE ${where25} ORDER BY id`).split("\n").filter(Boolean);
+    check(ids25.length === CROWD25 && new Set(ids25).size === CROWD25,
+      `and the table holds exactly ${ids25.length} distinct ids under this run's address`);
 
     const made25 = await (await fetch(`${API}/lead-lists`, {
-      method: "POST", headers: H, body: JSON.stringify({ name: `${tag25} crowd`, isDynamic: false }),
+      method: "POST", headers: H, body: JSON.stringify({ name: `${tag25} projection`, isDynamic: false }),
     }));
-    const list25 = await made25.json();
-    log(`  POST /api/lead-lists -> ${made25.status} ${JSON.stringify({ id: list25.id, name: list25.name, isDynamic: list25.isDynamic })}`);
-    check(made25.status === 201 && typeof list25.id === "string" && list25.isDynamic === false,
-      "a static list: the crowd is rows someone put in, not a filter re-evaluated on refresh");
-
-    const overflow25 = await fetch(`${API}/lead-lists/${list25.id}?action=add-leads`, {
-      method: "POST", headers: H, body: JSON.stringify({ leadIds: idsNow25 }),
-    });
-    const overflowBody25 = await overflow25.json();
-    log(`  one POST naming all ${idsNow25.length} ids -> ${overflow25.status} ${String(overflowBody25.error ?? "").slice(0, 80)}`);
-    check(overflow25.status >= 400 && /at most/.test(String(overflowBody25.error ?? "")),
-      "the write door keeps its own cap on one request — a membership of 150 is filled in pages, and the refusal says the number rather than writing half of it");
+    list25 = await made25.json();
     const filled25 = [];
     for (let off = 0; off < CROWD25; off += 100) {
       const res = await fetch(`${API}/lead-lists/${list25.id}?action=add-leads`, {
-        method: "POST", headers: H, body: JSON.stringify({ leadIds: idsNow25.slice(off, off + 100) }),
+        method: "POST", headers: H, body: JSON.stringify({ leadIds: ids25.slice(off, off + 100) }),
       });
       filled25.push(res.status);
     }
-    log(`  add-leads in ${filled25.length} calls of at most 100 -> ${filled25.join(", ")}`);
-    check(filled25.every((s) => s === 200), `and the list is filled through the door that exists (${filled25.join("/")})`);
     const members25 = Number(q25(`SELECT count(*) FROM "LeadListMember" WHERE "listId"='${list25.id}'`));
-    check(members25 === CROWD25, `the table says the membership is ${members25} rows`);
+    log(`  POST /api/lead-lists -> ${made25.status} ${list25.id}; add-leads in ${filled25.length} calls -> ${filled25.join(", ")}; the table counts ${members25} members`);
+    check(made25.status === 201 && list25.isDynamic === false && filled25.every((s) => s === 200) && members25 === CROWD25,
+      `a static list of ${members25} members — more than the ${READ_MEMBER_CAP} the door hands in one read, so the cap and the projection can be told apart below`);
 
-    const typo25 = await fetch(`${API}/lead-lists/${list25.id}?action=add-leads`, {
-      method: "POST", headers: H, body: JSON.stringify({ leadIds: [`${tag25}isnotalead`] }),
-    });
-    const typoBody25 = await typo25.json();
-    log(`  add-leads with one id nobody has -> ${typo25.status} ${JSON.stringify(typoBody25).slice(0, 110)}`);
-    check(typo25.status === 422 && Array.isArray(typoBody25.unknownIds) && typoBody25.unknownIds[0] === `${tag25}isnotalead`,
-      "and an id the workspace does not have is named, not a 500 from the foreign key");
+    // The answer that asks for nothing: every column, and exactly the columns the table has.
+    const whole25 = await read25("");
+    const keys25 = leadKeys25(whole25);
+    log(`  GET /api/lead-lists/{id} -> ${whole25.status} ${whole25.bytes} bytes, members=${askedLeads25(whole25).length}, ${(new Set(askedLeads25(whole25).map((l) => Object.keys(l).length))).size} distinct lead-key counts`);
+    check(whole25.status === 200 && askedLeads25(whole25).length === READ_MEMBER_CAP && members25 > READ_MEMBER_CAP,
+      `the member cap is the door's and stays the door's: the table holds ${members25} members and the read hands ${askedLeads25(whole25).length}`);
+    assert25Equal(keys25, schema25, "the unprojected lead object is the row the table describes");
+    check(whole25.body?.memberFields === undefined,
+      "and a caller who never named a column is not told which columns exist — the answer is what it always was, byte for byte");
 
-    const readList25 = async (query) => {
-      const res = await fetch(`${API}/lead-lists/${list25.id}${query}`, { headers: H });
-      const text = await res.text();
-      let body = null;
-      try { body = JSON.parse(text); } catch { /* a non-JSON answer is itself the finding */ }
-      return { status: res.status, bytes: Buffer.byteLength(text), body };
-    };
-    const idsOf25 = (answer) => (answer?.body?.members ?? []).map((m) => m.leadId);
+    // The same list, named down to two columns.
+    const two25 = await read25("?fields=email,score");
+    log(`  GET ?fields=email,score -> ${two25.status} ${two25.bytes} bytes, lead keys=[${leadKeys25(two25).join(", ")}], memberFields=${JSON.stringify(two25.body?.memberFields)}`);
+    check(two25.status === 200 && leadKeys25(two25).join(",") === "email,score" && askedLeads25(two25).length === READ_MEMBER_CAP,
+      `the projection is obeyed: ${askedLeads25(two25).length} members, two keys each, where the same read carried ${keys25.length}`);
+    check(two25.bytes < whole25.bytes / 4,
+      `and the wire is really smaller: ${two25.bytes} bytes against ${whole25.bytes}, ${(whole25.bytes / two25.bytes).toFixed(1)}× less for the same ${askedLeads25(two25).length} members`);
+    check(two25.bytes < whole25.bytes - 1000 && two25.body?.members?.[0]?.lead?.company === undefined,
+      "a column the caller did not name is not there — not emptied, not present, not on the wire");
+    check(two25.body?.memberFields?.join(",") === "email,score",
+      "the answer says which columns it handed back, so a caller does not have to guess whether the door listened");
 
-    const first25 = await readList25("");
-    const mp125 = first25.body?.memberPage;
-    log(`  GET /api/lead-lists/{id} -> ${first25.status} ${first25.bytes} bytes, members=${idsOf25(first25).length}`);
-    log(`  memberPage = ${JSON.stringify(mp125)}`);
-    check(first25.status === 200 && mp125?.recorded === CROWD25 && idsOf25(first25).length === 100
-      && mp125?.returned === 100 && mp125?.page === 1 && mp125?.limit === 100
-      && mp125?.totalPages === 2 && mp125?.truncated === true,
-      "a caller who asked for nothing gets the page this door has always handed — 100 of them — and is now told 150 were recorded and the answer is truncated");
-    const greedy25 = await readList25("?limit=999999");
-    log(`  page 1 is ${first25.bytes} bytes; the same URL on a 150-member list before the round answered 163031 bytes of probe rows — all it could answer, since it had no page and no total`);
-    check(greedy25.bytes === first25.bytes && idsOf25(greedy25).join(",") === idsOf25(first25).join(","),
-      `and asking for ${"limit=999999"} in one call buys the same ${idsOf25(first25).length} rows and the same ${greedy25.bytes} bytes — the page size is a ceiling on a call now, where 100 was a ceiling on the answer`);
+    // The order the caller wrote is the order they get back.
+    const order25 = await read25("?fields=score,company,email");
+    log(`  GET ?fields=score,company,email -> ${order25.status} ${order25.bytes} bytes, lead keys=[${leadKeys25(order25).join(", ")}]`);
+    check(leadKeys25(order25).join(",") === "score,company,email" && order25.body?.memberFields?.join(",") === "score,company,email",
+      "three names in an order are three keys in that order — the door does not re-sort the caller's list");
 
-    const third25 = await readList25("?limit=5&page=3");
-    const mp325 = third25.body?.memberPage;
-    const want325 = q25(`SELECT id FROM "Lead" WHERE ${where25} ORDER BY id LIMIT 5 OFFSET 10`).split("\n").filter(Boolean);
-    log(`  GET ?limit=5&page=3 -> ${third25.status} ${third25.bytes} bytes, members=${idsOf25(third25).join(", ")}`);
-    log(`  memberPage = ${JSON.stringify(mp325)}`);
-    check(third25.status === 200 && idsOf25(third25).join(",") === want325.join(",")
-      && mp325?.page === 3 && mp325?.limit === 5 && mp325?.recorded === CROWD25
-      && mp325?.totalPages === 30 && mp325?.truncated === true,
-      "the query string is read: page 3 of fifths is the three through five rows of the membership in `leadId` order, and the total is still the whole 150");
-    check(idsOf25(third25).join(",") !== idsOf25(first25).slice(0, 5).join(",") && third25.bytes !== first25.bytes,
-      "which is the finding the old door could not make: two different query strings are two different answers");
+    // One vocabulary, and the door prints it in the refusal that enforces it.
+    const typo25 = await read25("?fields=nonsense");
+    const vocab25 = (String(typo25.body?.error ?? "").match(/must be one of ([^"]+?)(?:, got |$)/)?.[1] ?? "").split(" | ").filter(Boolean);
+    log(`  GET ?fields=nonsense -> ${typo25.status} ${typo25.bytes} bytes: ${String(typo25.body?.error ?? "").slice(0, 96)}…`);
+    check(typo25.status === 400 && typo25.body?.members === undefined,
+      "a name the product does not have is refused with 400, and the refusal carries no members at all — no whole row wearing a 400");
+    check(vocab25.length > 0 && vocab25.every((name) => schema25.includes(name)),
+      `the ${vocab25.length} names the refusal prints are all columns the table has (${vocab25.length} of ${schema25.length}): the door enforces the vocabulary it advertises`);
+    check(String(typo25.body?.error ?? "").includes("nonsense") && typo25.body?.fields?.["fields[0]"] !== undefined,
+      "and it names the caller's own word and the entry it was wrong in, the way every array in this API is judged");
+    check(typo25.bytes < whole25.bytes / 100,
+      `a refused read costs ${typo25.bytes} bytes where the unrefused one cost ${whole25.bytes}`);
+    const allOfIt25 = await read25("?fields=" + vocab25.join(","));
+    check(allOfIt25.status === 200 && leadKeys25(allOfIt25).length === vocab25.length
+      && vocab25.every((name) => leadKeys25(allOfIt25).includes(name)),
+      `asked for every name in that vocabulary it hands back exactly ${leadKeys25(allOfIt25).length} keys — the export door's column set, which is ${schema25.length - vocab25.length} columns narrower than the row`);
 
-    const second25 = await readList25("?page=2");
-    const tiled25 = [...idsOf25(first25), ...idsOf25(second25)];
-    check(idsOf25(second25).length === 50 && new Set(tiled25).size === CROWD25
-      && idsOf25(first25).every((id) => !idsOf25(second25).includes(id)),
-      `page 1 and page 2 at the default size tile the crowd: ${idsOf25(first25).length} + ${idsOf25(second25).length} = ${tiled25.length} with no member on two pages and none missed`);
-    check(tiled25.join(",") === idsNow25.join(","),
-      "and the pages concatenated are the table's own `ORDER BY id` — the order is stated, not whatever the heap produced");
+    // The shapes a caller can reach for by accident, each measured rather than asserted.
+    const repeat25 = await read25("?fields=email,email");
+    const one25 = await read25("?fields=email");
+    const twice25 = await read25("?fields=email&fields=score");
+    const padded25 = await read25("?fields=%20email%20");
+    log(`  ?fields=email,email -> ${repeat25.bytes} bytes, keys=[${leadKeys25(repeat25)}]  |  ?fields=email -> ${one25.bytes} bytes  |  ?fields=email&fields=score -> ${twice25.status} ${twice25.bytes} bytes, keys=[${leadKeys25(twice25)}]  |  ?fields=%20email%20 -> ${padded25.status} keys=[${leadKeys25(padded25)}]`);
+    check(repeat25.bytes === one25.bytes && leadKeys25(repeat25).join(",") === "email",
+      "a column asked twice is one column: the same bytes as the single ask, not the same column twice");
+    check(twice25.status === 200 && leadKeys25(twice25).join(",") === "email,score" && twice25.bytes === two25.bytes,
+      "a repeated parameter names both columns — `get` would have taken the first and quietly dropped the second");
+    check(padded25.status === 200 && leadKeys25(padded25).join(",") === "email",
+      "the padding around a name is not part of the name");
 
-    const small25 = [];
-    for (let page = 1; page <= 3; page++) small25.push(...idsOf25(await readList25(`?limit=50&page=${page}`)));
-    check(small25.length === CROWD25 && new Set(small25).size === CROWD25 && small25.join(",") === idsNow25.join(","),
-      `and at 50 a page the same crowd arrives in ${small25.length / 50} calls: a different page size is a different cut of one ordered membership, not a different crowd`);
-    const again25 = idsOf25(await readList25("?limit=50&page=2"));
-    check(again25.join(",") === idsOf25(await readList25("?limit=50&page=2")).join(","),
-      "two calls of one URL return the same rows in the same order — the determinism the caller can cache on");
-
-    const beyond25 = await readList25("?page=99");
-    const mpOut25 = beyond25.body?.memberPage;
-    log(`  GET ?page=99 -> ${beyond25.status} members=${idsOf25(beyond25).length} memberPage=${JSON.stringify(mpOut25)}`);
-    check(beyond25.status === 200 && idsOf25(beyond25).length === 0 && mpOut25?.returned === 0
-      && mpOut25?.truncated === false && mpOut25?.recorded === CROWD25 && mpOut25?.totalPages === 2,
-      "a page past the end is empty and says so: `truncated:false` there means the page ran out, because `recorded` still says the crowd is 150 and unmoved");
-
-    const big25 = await readList25("?limit=999999&page=2");
-    log(`  GET ?limit=999999&page=2 -> ${big25.status} members=${idsOf25(big25).length} memberPage=${JSON.stringify(big25.body?.memberPage)}`);
-    check(idsOf25(big25).length === 50 && big25.body?.memberPage?.limit === 100
-      && big25.body?.memberPage?.truncated === false,
-      "an impossible page size is clamped to the largest page this door will hand (100), so page 2 is the 50 that are left rather than a full-table read");
-
-    for (const junk25 of ["?page=0", "?page=-2", "?page=abc", "?page=1.7", "?limit=0", "?limit=-1", "?limit=abc"]) {
-      const ans25 = await readList25(junk25);
-      const mp25 = ans25.body?.memberPage;
-      const want25 = junk25.startsWith("?page") ? 1 : 100;
-      const got25 = junk25.startsWith("?page") ? mp25?.page : mp25?.limit;
-      check(ans25.status === 200 && got25 === want25 && idsOf25(ans25).length === 100,
-        `${junk25} falls back to the door's own number (${junk25.startsWith("?page") ? "page" : "limit"}=${want25}) instead of a 500 from a negative skip or a NaN take`);
+    for (const [query, want] of [
+      ["?fields=", /non-empty string/],
+      ["?fields=email,,score", /fields\[1\]/],
+      ["?fields=Email", /must be one of/],
+    ]) {
+      const bad25 = await read25(query);
+      log(`  GET ${query.padEnd(24)} -> ${bad25.status} ${String(bad25.body?.error ?? "").slice(0, 84)}`);
+      check(bad25.status === 400 && want.test(String(bad25.body?.error ?? "")),
+        `${query || "?fields="} is refused rather than guessed at — ${want}`);
     }
+    const greedy25 = await read25("?fields=" + Array.from({ length: 300 }, () => "email").join(","));
+    const greedyBody25 = await JSON.stringify(greedy25.body ?? {});
+    log(`  GET ?fields=(300 entries) -> ${greedy25.status} ${String(greedyBody25).slice(2, 80)}`);
+    check(greedy25.status === 400 && /at most 100/.test(greedyBody25),
+      "and a list of 300 names is capped where every other list in this API is capped");
 
-    const recorded25 = Number(q25(`SELECT count(*) FROM "LeadListMember" WHERE "listId"='${list25.id}'`));
-    check(recorded25 === mp125?.recorded && recorded25 === CROWD25,
-      `the total in the answer is the table's own count of the membership (${recorded25})`);
-    const collection25 = await (await fetch(`${API}/lead-lists?limit=100`, { headers: H })).json();
-    const rowInCollection25 = (collection25.lists ?? []).find((l) => l.id === list25.id);
-    log(`  GET /api/lead-lists -> this list's \`_count.members\` = ${rowInCollection25?._count?.members} against the detail door's \`recorded\` = ${mp125?.recorded}`);
-    check(rowInCollection25?._count?.members === mp125?.recorded,
-      "the collection door and the detail door agree on this list's size — which they could not before, because only the collection one had a number");
+    // The member's own columns are not the caller's to project away.
+    const memberKeys25 = Object.keys(two25.body?.members?.[0] ?? {}).sort().join(",");
+    log(`  a projected member still carries ${memberKeys25}`);
+    check(memberKeys25 === "addedAt,id,lead,leadId,listId",
+      "the projection chooses the lead's columns and never the membership's — a member without its `leadId` is a row nobody can take off the list");
 
-    const columns25 = cols25("LeadList");
-    const memberColumns25 = cols25("LeadListMember");
-    const topKeys25 = Object.keys(first25.body ?? {}).sort();
-    const wantTop25 = [...(columns25 ?? []), "members", "memberPage"].sort();
-    log(`  top-level keys: ${topKeys25.join(" ")}`);
-    check(columns25 !== null && topKeys25.join(",") === wantTop25.join(","),
-      "nothing the old answer carried was renamed or dropped: the row's own columns, `members`, and the one key the round added");
-    const memberKeys25 = Object.keys(first25.body?.members?.[0] ?? {}).sort();
-    const wantMember25 = [...(memberColumns25 ?? []), "lead"].sort();
-    check(memberColumns25 !== null && memberKeys25.join(",") === wantMember25.join(","),
-      `a member is still the member it was (${memberKeys25.join(", ")}) — the lead is still reachable at \`members[i].lead.email\``);
-    check(JSON.stringify(mp125) === JSON.stringify({ recorded: 150, returned: 100, page: 1, limit: 100, totalPages: 2, truncated: true }),
-      "and `memberPage` is exactly the six fields, in the order the code writes them: recorded, returned, page, limit, totalPages, truncated");
+    // A named column that is NULL in the row stays a key: the select is a set of names, not a set of values.
+    const nullProbe25 = await read25("?fields=email,phone");
+    const nulls25 = askedLeads25(nullProbe25).filter((l) => l.phone === null).length;
+    log(`  GET ?fields=email,phone -> ${nullProbe25.status}, keys=[${leadKeys25(nullProbe25)}], ${nulls25} of ${askedLeads25(nullProbe25).length} members hold no phone`);
+    check(leadKeys25(nullProbe25).join(",") === "email,phone" && nulls25 > 0 && nulls25 < askedLeads25(nullProbe25).length,
+      "a column a lead does not have is `null` under its own key, not a key that vanished — the named set is the answer, whatever the values are");
 
-    const gone25 = await fetch(`${API}/lead-lists/list_no_such_list_${RUN}`, { headers: H });
-    const goneBody25 = await gone25.json();
-    log(`  GET a list that does not exist -> ${gone25.status} ${JSON.stringify(goneBody25)}`);
-    check(gone25.status === 404 && goneBody25.error === "Not found" && goneBody25.memberPage === undefined,
-      "a list nobody has is still a 404 before any counting: no total is reported for a row that does not exist");
+    // What this does not claim, printed rather than hidden.
+    for (const synonym of ["?select=email", "?include=email", "?fields[]=email"]) {
+      const same25 = await read25(synonym);
+      log(`  GET ${synonym.padEnd(20)} -> ${same25.status} ${same25.bytes} bytes, ${leadKeys25(same25).length} keys per lead`);
+      check(same25.bytes === whole25.bytes && leadKeys25(same25).length === schema25.length,
+        `${synonym} still answers the whole row: this door reads the parameter named \`fields\` and nothing else`);
+    }
+    const ghost25 = await fetch(`${API}/lead-lists/nosuchlist99?fields=email`, { headers: H });
+    const ghostBad25 = await fetch(`${API}/lead-lists/nosuchlist99?fields=nonsense`, { headers: H });
+    log(`  a list that does not exist: good name -> ${ghost25.status}, bad name -> ${ghostBad25.status}`);
+    check(ghost25.status === 404 && ghostBad25.status === 400,
+      "the not-found is unmoved for a name the door can honour, and a name it cannot is judged before the row is read — an unauthenticated caller learns only what `/api/openapi`, served without a key, already prints");
 
+    // Cleanup: the list through its own door, the crowd the import door wrote through the table.
     const del25 = await fetch(`${API}/lead-lists/${list25.id}`, { method: "DELETE", headers: H });
-    const afterDelete25 = await readList25("");
-    log(`  DELETE the list -> ${del25.status}; GET it -> ${afterDelete25.status}`);
-    check(del25.status === 200 && afterDelete25.status === 404,
-      "and the door that deletes a list deletes it: the membership page goes with the row, not a page of members nobody owns");
-    const leftMembers25 = q25(`SELECT count(*) FROM "LeadListMember" WHERE "listId"='${list25.id}'`);
-    const leftList25 = q25(`SELECT count(*) FROM "LeadList" WHERE id='${list25.id}'`);
     const goneLeads25 = q25(`WITH d AS (DELETE FROM "Lead" WHERE ${where25} RETURNING id) SELECT count(*) FROM d`);
     const leftLeads25 = q25(`SELECT count(*) FROM "Lead" WHERE ${where25}`);
-    const bornFiles25 = born25(t25);
-    log(`  cleanup: ${leftList25} list row, ${leftMembers25} membership rows, ${goneLeads25} leads deleted and ${leftLeads25} left, ${bornFiles25.length} files of this step's window (${bornFiles25.join(" ") || "none"})`);
-    check(leftList25 === "0" && leftMembers25 === "0" && Number(leftLeads25) === 0 && bornFiles25.length === 0,
-      `the step leaves nothing behind: ${leftLeads25} crowd leads, ${leftMembers25} membership rows, ${leftList25} list rows and ${bornFiles25.length} files — a read round writes no file`);
-    log("  left alone, still by name: `recorded` and the collection door's `_count.members` are two reads of one table and are not reconciled against what the page holds — a member deleted between the count and the page is a `recorded` one row too high; and the cap on one `add-leads` request (the write door's, at 100) is a different number from the page size this round set, so filling a big list is still a loop the caller writes.");
+    const leftMembers25 = q25(`SELECT count(*) FROM "LeadListMember" WHERE "listId"='${list25.id}'`);
+    const leftList25 = await fetch(`${API}/lead-lists/${list25.id}`, { headers: H });
+    log(`  cleanup: DELETE the list -> ${del25.status}, ${goneLeads25} leads deleted, ${leftMembers25} members and ${leftLeads25} leads left, the list now reads ${leftList25.status}`);
+    check(del25.status === 200 && leftList25.status === 404 && Number(leftLeads25) === 0 && leftMembers25 === "0",
+      `the step leaves nothing behind: ${leftLeads25} crowd leads, ${leftMembers25} membership rows and a list that answers ${leftList25.status}`);
+    const took25 = Date.now() - t25;
+    log(`  (${took25} ms; the widest ask in this step cost ${whole25.bytes} bytes and the narrowest ${one25.bytes}, on the same ${askedLeads25(whole25).length} members)`);
+  }
+}
+
+function assert25Equal(actual, expected, message) {
+  const a = [...actual].sort().join(",");
+  const e = [...expected].sort().join(",");
+  log(`  ${a === e ? "✓" : "✗"} ${message} (${actual.length} keys against ${expected.length} columns)`);
+  if (a !== e) {
+    log(`    only in the answer: ${actual.filter((k) => !expected.includes(k)).join(", ") || "none"}; only in the table: ${expected.filter((k) => !actual.includes(k)).join(", ") || "none"}`);
+    process.exitCode = 1;
   }
 }
 

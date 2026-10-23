@@ -225,7 +225,11 @@ deployables: the five paid apps and flow/api 5/5 steps · 8/8 checks, hub
 anonymous visitors, billing webhooks reject unsigned and forged payloads (4xx,
 never 2xx/5xx), abetapi refuses anonymous callers and publishes its contract,
 abetflow webhooks refuse a wrong secret, and the hub's `/llms.txt` keeps its
-honesty line. Exit 0 or it names the failing host and check.
+honesty line. The products that ship an OpenAPI contract (analytics, flow,
+leadworks, leadgenius) serve a real OpenAPI 3.1 document, versioned, with its
+servers naming the host it is fetched from — an absence is a named skip, not a
+pass, until connect and agent ship theirs. Exit 0 or it names the failing host
+and check.
 
 Then the sales walk, per paid app in a fresh private window:
 

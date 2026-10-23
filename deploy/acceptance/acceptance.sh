@@ -15,6 +15,8 @@
 #     honesty line, and the UI carries no temporary *.onrender.com links
 #   · every app host serves its discovery files — /llms.txt (the AI index)
 #     and /robots.txt (pointing at the index where it is a static file)
+#   · the products that ship an OpenAPI contract serve a real OpenAPI 3.1
+#     document, versioned, pointing its servers at the host it is fetched from
 #   · the marketing site's AI files serve once shipped (missing = skip, see
 #     deploy/site-ai-pack), and its robots gains AI directives
 #
@@ -271,6 +273,7 @@ check_paid() {
   check_linkcard "$base"
   check_demo_workspace "$base"
   check_suite_prices "$base"
+  check_contract "$base"
 }
 
 check_hub() {
@@ -311,6 +314,45 @@ check_openapi_alias() {
   fi
 }
 
+# The products' OpenAPI contracts (analytics, flow, leadworks, leadgenius so
+# far — connect and agent have none yet, and that must stay a skip that says
+# so, not a pass). A contract that serves must be a real OpenAPI 3.1 document,
+# versioned, carrying paths, and pointing its servers at THIS host — a spec
+# copied from a sibling app, or a stale one with no version, reads like a
+# contract while telling an integrator nothing
+# (deploy/site-ai-pack checks the *site*'s copy live; this checks the apps').
+check_contract() {
+  local base="$1" host b
+  host=$(printf '%s' "$base" | sed 's|^https\?://||; s|/$||')
+  local c
+  c=$(get_code "$base/openapi.json")
+  if [ "$c" != 200 ]; then
+    skip 'OpenAPI contract serves, and names this host' "openapi.json → $c — no contract shipped yet; the README is the docs"
+    return
+  fi
+  b=$(get_body "$base/openapi.json")
+  if printf '%s' "$b" | grep -q '"openapi": *"3\.1'; then
+    ok 'OpenAPI contract serves' 'openapi.json → 200, OpenAPI 3.1'
+  else
+    bad 'OpenAPI contract serves' 'openapi.json → 200 but not an OpenAPI 3.1 document'
+  fi
+  if printf '%s' "$b" | grep -q '"version": *"[^"]\+'; then
+    ok 'the contract carries the app version' 'info.version present'
+  else
+    bad 'the contract carries the app version' 'no info.version — an unversioned contract cannot be tracked'
+  fi
+  if printf '%s' "$b" | grep -q '"paths": *{'; then
+    ok 'the contract carries paths' 'paths object present'
+  else
+    bad 'the contract carries paths' 'no paths — a document with nothing in it'
+  fi
+  if printf '%s' "$b" | grep -q "\"url\": *\"https\?://$host\""; then
+    ok 'the contract points its servers at this host' "servers name $host"
+  else
+    bad 'the contract points its servers at this host' "servers miss $host — the doc may be a sibling's copy"
+  fi
+}
+
 check_api() {
   local base="$1"
   check_front "$base"; check_health "$base"
@@ -339,6 +381,7 @@ check_flow() {
   check_linkcard "$base"
   check_demo_workspace "$base"
   check_suite_prices "$base"
+  check_contract "$base"
 }
 
 check_pdf() {

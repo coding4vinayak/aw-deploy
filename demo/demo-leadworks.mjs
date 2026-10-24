@@ -2409,4 +2409,196 @@ function assert25Equal(actual, expected, message) {
   }
 }
 
+log("\n═══ STEP 26 — the lead read obeys the same ?fields= the list read learned, and drops the columns and joins nobody named (#47) ═══");
+// #46 taught `GET /api/lead-lists/{id}` to read `fields`; this round's base build answers the
+// same question at the fleet's primary read door with the same page it always did
+// (`/tmp/opencode/r47_probe_after.mjs` run against the base build, a crowd of 300 imported
+// leads with 100 of them on one list):
+//
+//   GET /api/leads?limit=50                        -> 200, 86927 bytes, 35 keys per row
+//   GET /api/leads?limit=50&fields=email,score,status -> 200, 86927 bytes — the same answer
+//   GET /api/leads?limit=50&fields=nonsense        -> 200, 86927 bytes — and no refusal
+//   GET /api/leads?limit=50&select=email           -> 200, 86927 bytes
+//
+// One page of fifty was 86,927 bytes, of which `scoreBreakdown` alone — the arithmetic #43
+// stores beside each lead — is 45,480, and the nested `listMemberships` a caller cannot ask
+// about costs 18,916 more. A dialer sync that names three columns was handed 35. `?fields=`
+// is now judged here too, against the same `LEAD_FIELD_PICK` table as the list door and the
+// export door, and applied as the `select` on the way in.
+{
+  const q26 = (sql) => psql18(sql, true)?.trim();
+  const CROWD26 = 240;
+  const PAGE26 = 100;
+  const tag26 = `door47${RUN}`;
+  const where26 = `"email" LIKE '${tag26}.%@crowd.test'`;
+  let list26 = null;
+  const cols26 = (table) => {
+    const raw = q26(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='${table}' ORDER BY column_name`);
+    return raw === null ? null : raw.split("\n").filter(Boolean);
+  };
+  const read26 = async (query, headers = H) => {
+    const res = await fetch(`${API}/leads${query}`, { headers });
+    const text = await res.text();
+    let body = null;
+    try { body = JSON.parse(text); } catch { /* a non-JSON answer is itself the finding */ }
+    return { status: res.status, bytes: Buffer.byteLength(text), body };
+  };
+  const rows26 = (answer) => answer.body?.leads ?? [];
+  const keys26 = (answer) => Object.keys(rows26(answer)[0] ?? {});
+
+  const schema26 = cols26("Lead");
+  if (schema26 === null) {
+    log("  this step's cross-checks are the table's own column list, and with `psql` unreachable the projection cannot be judged against the schema rather than against this file — so the step is reported as unmeasurable instead of passed.");
+  } else {
+    log(`  the table says a \`Lead\` row is ${schema26.length} columns; this door adds its own joins on top of them`);
+    const t26 = Date.now();
+
+    const csv26 = [
+      "email,phone,first name,last name,company,title,tags",
+      ...Array.from({ length: CROWD26 }, (_, i) => `${tag26}.${i}@crowd.test,${i % 2 ? "" : `+1555888${String(i).padStart(4, "0")}`},Door${i},Surname${i},Projection Estates ${i % 11},Head of Growth,${tag26}`),
+    ].join("\n");
+    const imp26 = await fetch(`${API}/leads/import`, { method: "POST", headers: { authorization: "Bearer " + KEY, "content-type": "text/csv" }, body: csv26 });
+    const impBody26 = await imp26.json();
+    log(`  POST /api/leads/import ${CROWD26} rows -> ${imp26.status} imported=${impBody26.imported} invalid=${impBody26.invalid}`);
+    check(imp26.status === 201 && impBody26.imported === CROWD26 && impBody26.invalid === 0,
+      `the crowd is ${CROWD26} rows the intake door wrote in one request`);
+
+    const ids26 = q26(`SELECT id FROM "Lead" WHERE ${where26} ORDER BY id`).split("\n").filter(Boolean);
+    check(ids26.length === CROWD26 && new Set(ids26).size === CROWD26,
+      `and the table holds exactly ${ids26.length} distinct ids under this run's address`);
+
+    const made26 = await fetch(`${API}/lead-lists`, { method: "POST", headers: H, body: JSON.stringify({ name: `${tag26} memberships`, isDynamic: false }) });
+    list26 = await made26.json();
+    const add26 = await fetch(`${API}/lead-lists/${list26.id}?action=add-leads`, { method: "POST", headers: H, body: JSON.stringify({ leadIds: ids26.slice(0, PAGE26) }) });
+    const members26 = Number(q26(`SELECT count(*) FROM "LeadListMember" WHERE "listId"='${list26.id}'`));
+    log(`  POST /api/lead-lists -> ${made26.status} ${list26.id}; add-leads -> ${add26.status}; the table counts ${members26} members, so a page of this crowd carries nested memberships`);
+    check(made26.status === 201 && add26.status === 200 && members26 === PAGE26,
+      `${members26} of the crowd sit on one list, which is why the unprojected page below pays for a join`);
+
+    const whole26 = await read26(`?limit=${PAGE26}`);
+    const wholeKeys26 = keys26(whole26);
+    const joinKeys26 = wholeKeys26.filter((k) => !schema26.includes(k));
+    const rowsWithMembership26 = rows26(whole26).filter((l) => (l.listMemberships ?? []).length).length;
+    log(`  GET /api/leads?limit=${PAGE26} -> ${whole26.status} ${whole26.bytes} bytes, ${rows26(whole26).length} rows, ${wholeKeys26.length} keys/row (${rowsWithMembership26} of them in a list)`);
+    check(whole26.status === 200 && rows26(whole26).length === PAGE26 && joinKeys26.join(",") === "listMemberships,_count",
+      `the unprojected row is the table's ${schema26.length} columns plus exactly the two joins this door adds: ${joinKeys26.join(", ")}`);
+
+    const proj26 = await read26(`?limit=${PAGE26}&fields=email,score,status`);
+    const projKeys26 = keys26(proj26);
+    log(`  GET ?fields=email,score,status -> ${proj26.status} ${proj26.bytes} bytes, ${projKeys26.length} keys [${projKeys26.join(", ")}]`);
+    check(projKeys26.join(",") === "email,score,status" && projKeys26.every((k) => schema26.includes(k)),
+      "the projected row carries the three names asked for, in the order asked, and every one of them is a column the table has");
+    check(rows26(proj26).every((l) => !("listMemberships" in l) && !("_count" in l)),
+      "a projected page stops carrying the joins a caller had no way to ask about — no nested list records, no counts");
+    check(proj26.bytes * 10 < whole26.bytes,
+      `and the wire is really smaller: ${proj26.bytes} bytes against ${whole26.bytes}, ${(whole26.bytes / proj26.bytes).toFixed(1)}× less for the same ${rows26(proj26).length} rows`);
+
+    const ordered26 = (await read26(`?limit=${PAGE26}&fields=score,id`)).body.leads;
+    const scores26 = ordered26.map((l) => l.score);
+    const monotone26 = scores26.every((s, i) => i === 0 || scores26[i - 1] >= s);
+    const repeat26 = (await read26(`?limit=${PAGE26}&fields=id`)).body.leads.map((l) => l.id);
+    const pageIdSet26 = new Set(ordered26.map((l) => l.id));
+    const drift26 = repeat26.filter((id) => !pageIdSet26.has(id)).length;
+    log(`  ?fields=score,id -> the page is non-increasing in score: ${monotone26}; and a second call of one URL differs from the first on ${drift26} of ${PAGE26} rows`);
+    check(monotone26, "a projection keeps the door's own order: the page it hands back is still sorted by score, highest first");
+    const wsLeads26 = q26(`SELECT count(*) FROM "Lead"`);
+    const tiles26 = [];
+    for (let pg = 1; pg <= 3; pg++) tiles26.push((await read26(`?limit=${PAGE26}&page=${pg}&fields=id`)).body.leads.map((l) => l.id));
+    const flat26 = tiles26.flat();
+    const dup26 = flat26.length - new Set(flat26).size;
+    log(`  three pages of ${PAGE26} tile ${flat26.length} rows with ${dup26} of them appearing twice, and the crowd is ${wsLeads26}`);
+    // Measured on this crowd and promised by nothing: `orderBy: { score: "desc" }` has no
+    // tiebreaker, so which rows share a boundary score is the database's business. #45 answered
+    // that at the list door with `orderBy: { leadId: "asc" }`; this door is still #45's finding,
+    // and a projection neither causes it nor cures it.
+    log(`  (not this round's claim: the order has no tiebreaker, so nothing above is guaranteed across runs — ${drift26} rows moved between two identical calls this time, and a secondary sort key is the answer this round did not attempt)`);
+
+    const envWhole26 = { total: whole26.body.total, page: whole26.body.page, limit: whole26.body.limit, totalPages: whole26.body.totalPages };
+    const envProj26 = { total: proj26.body.total, page: proj26.body.page, limit: proj26.body.limit, totalPages: proj26.body.totalPages };
+    log(`  envelope unprojected ${JSON.stringify(envWhole26)}; projected ${JSON.stringify(envProj26)}; the table says the workspace holds ${wsLeads26} leads`);
+    check(JSON.stringify(envWhole26) === JSON.stringify(envProj26) && String(envProj26.total) === wsLeads26,
+      "the page, the limit and the total are the same numbers on both answers, and the total is the table's own count");
+    check(!("leadFields" in whole26.body) && proj26.body.leadFields.join(",") === "email,score,status",
+      "the answer says which columns it handed back only when the caller asked for columns");
+
+    const one26 = await read26(`?limit=${PAGE26}&fields=email`);
+    const twice26 = await read26(`?limit=${PAGE26}&fields=email,email`);
+    const padded26 = await read26(`?limit=${PAGE26}&fields=%20email%20`);
+    const both26 = await read26(`?limit=${PAGE26}&fields=email&fields=score`);
+    log(`  ?fields=email -> ${one26.bytes}B [${keys26(one26).join(",")}]; twice -> ${twice26.bytes}B; padded -> ${padded26.bytes}B [${keys26(padded26).join(",")}]; repeated -> ${both26.bytes}B [${keys26(both26).join(",")}]`);
+    check(one26.bytes === twice26.bytes && keys26(twice26).join(",") === "email",
+      "a column asked twice is one column: the same bytes as the single ask, not that column twice");
+    check(keys26(padded26).join(",") === "email", "padding around a name is not part of the name");
+    check(keys26(both26).join(",") === "email,score" && both26.bytes > one26.bytes,
+      "two `fields` parameters are both taken, and the wider ask costs more — one page, not two reads");
+
+    const listOnly26 = await read26(`?listId=${list26.id}&limit=${PAGE26}&fields=email`);
+    const listIds26 = rows26(listOnly26).map((l) => l.email);
+    const onList26 = q26(`SELECT l."email" FROM "LeadListMember" m JOIN "Lead" l ON l.id=m."leadId" WHERE m."listId"='${list26.id}' AND l."email" LIKE '${tag26}.%@crowd.test' ORDER BY l."score" DESC, l.id`);
+    log(`  ?listId=…&fields=email -> ${listOnly26.status} ${listOnly26.bytes} bytes, ${rows26(listOnly26).length} rows, total=${listOnly26.body.total}, keys [${keys26(listOnly26).join(",")}]`);
+    check(listOnly26.body.total === members26 && keys26(listOnly26).join(",") === "email" && listIds26.length === members26,
+      "the projection is orthogonal to the filter: the list's own crowd, still one column, and the total is the membership count");
+    const onListSet26 = new Set(onList26.split("\n").filter(Boolean));
+    check(listIds26.every((e) => onListSet26.has(e)),
+      "every row the filtered read named is a row the membership table says is on that list");
+
+    const min26 = await read26(`?minScore=50&fields=email,score`);
+    const minSql26 = q26(`SELECT count(*) FROM "Lead" WHERE "score" >= 50`);
+    check(String(min26.body.total) === minSql26 && rows26(min26).every((l) => l.score >= 50 && Object.keys(l).join(",") === "email,score"),
+      `a score bound and a projection agree: total=${min26.body.total} against the table's ${minSql26}, and no row outside the bound snuck in`);
+
+    const empty26 = await read26(`?limit=${PAGE26}&fields=`);
+    const gap26 = await read26(`?limit=${PAGE26}&fields=email,,score`);
+    const caps26 = await read26(`?limit=${PAGE26}&fields=Email`);
+    const junk26 = await read26(`?limit=${PAGE26}&fields=nonsense`);
+    const over26 = await read26(`?limit=${PAGE26}&fields=${Array.from({ length: 300 }, (_, i) => `c${i}`).join(",")}`);
+    log(`  ?fields= -> ${empty26.status} ${empty26.bytes}B "${String(empty26.body?.error ?? "")}"; ?fields=email,,score -> ${gap26.status} "${String(gap26.body?.error ?? "").slice(0, 46)}"`);
+    log(`  ?fields=Email -> ${caps26.status} ${caps26.bytes}B; ?fields=nonsense -> ${junk26.status} ${junk26.bytes}B; 300 names -> ${over26.status} "${String(over26.body?.error ?? "")}"`);
+    check(empty26.status === 400 && /fields\[0\] must be a non-empty string/.test(String(empty26.body?.error)), "asking for nothing is a refusal, not the whole row");
+    check(gap26.status === 400 && /fields\[1\]/.test(String(gap26.body?.error)), "an empty entry in the middle of a good list is named by position");
+    check(caps26.status === 400 && /fields\[0\] must be one of/.test(String(caps26.body?.error)), "a column is not its own capitalisation");
+    check(over26.status === 400 && /fields holds 300 entries; at most 100/.test(String(over26.body?.error)), "the ask is capped at the same hundred the export door caps at");
+    check(junk26.status === 400 && junk26.bytes * 50 < whole26.bytes,
+      `a refused read costs ${junk26.bytes} bytes where the unrefused one cost ${whole26.bytes} — the door stops paying for a page it has already said no to`);
+
+    const vocab26 = (String(junk26.body?.error ?? "").match(/must be one of ([^"]+?)(?:, got |$)/)?.[1] ?? "").split(" | ").filter(Boolean);
+    const listJunk26 = await fetch(`${API}/lead-lists/${list26.id}?fields=nonsense`, { headers: H });
+    const vocab26List = (String((await listJunk26.json()).error ?? "").match(/must be one of ([^"]+?)(?:, got |$)/)?.[1] ?? "").split(" | ").filter(Boolean);
+    log(`  the leads door prints ${vocab26.length} names, the list door prints ${vocab26List.length}: ${vocab26.join(",") === vocab26List.join(",") ? "one vocabulary" : "TWO VOCABULARIES"}`);
+    check(vocab26.length > 0 && vocab26.every((n) => schema26.includes(n)),
+      `the ${vocab26.length} names the refusal prints are all columns the table has (${vocab26.length} of ${schema26.length})`);
+    check(vocab26.join(",") === vocab26List.join(","),
+      "and the two read doors print the same list in the same order — one array, not two that can drift");
+
+    const allVocab26 = await read26(`?limit=${PAGE26}&fields=${vocab26.join(",")}`);
+    log(`  every name in that vocabulary at once -> ${allVocab26.status} ${allVocab26.bytes} bytes, ${keys26(allVocab26).length} keys/row`);
+    check(allVocab26.status === 200 && keys26(allVocab26).length === vocab26.length && vocab26.length === schema26.length - 8,
+      `asked for all of it the door hands back exactly ${vocab26.length} keys — the exporter's column set, ${schema26.length - vocab26.length} columns narrower than the row`);
+
+    for (const ask of ["?select=email", "?include=email", "?fields[]=email"]) {
+      const r26 = await read26(`?limit=${PAGE26}&${ask.slice(1)}`);
+      log(`  GET ?limit=${PAGE26}&${ask.slice(1).padEnd(22)} -> ${r26.status} ${r26.bytes} bytes, ${keys26(r26).length} keys/row`);
+      check(r26.bytes === whole26.bytes && keys26(r26).length === wholeKeys26.length,
+        `${ask} is still the whole page: this door reads \`fields\` and no synonym for it`);
+    }
+
+    const noKeyJunk26 = await read26(`?limit=5&fields=nonsense`, {});
+    const noKeyGood26 = await read26(`?limit=5&fields=email`, {});
+    const listNoKey26 = await fetch(`${API}/lead-lists/${list26.id}?fields=nonsense`);
+    log(`  no key here: ?fields=nonsense -> ${noKeyJunk26.status}, ?fields=email -> ${noKeyGood26.status}; the list door, which must read its row before it knows whose it is, answers ${listNoKey26.status}`);
+    check(noKeyJunk26.status === 401 && noKeyGood26.status === 401,
+      "at this door the key is judged before the column names, so an unauthenticated bad ask leaks nothing");
+
+    const del26 = await fetch(`${API}/lead-lists/${list26.id}`, { method: "DELETE", headers: H });
+    const gone26 = q26(`DELETE FROM "Lead" WHERE ${where26}`);
+    const leftLeads26 = q26(`SELECT count(*) FROM "Lead" WHERE ${where26}`);
+    const leftMembers26 = q26(`SELECT count(*) FROM "LeadListMember" WHERE "listId"='${list26.id}'`);
+    const leftList26 = await fetch(`${API}/lead-lists/${list26.id}`, { headers: H });
+    log(`  cleanup: DELETE the list -> ${del26.status}, ${gone26.trim()}, ${leftLeads26} crowd leads and ${leftMembers26} members left, the list now reads ${leftList26.status}`);
+    check(del26.status === 200 && leftList26.status === 404 && leftMembers26 === "0" && Number(leftLeads26) === 0,
+      `the step leaves nothing behind: ${leftLeads26} crowd leads, ${leftMembers26} membership rows and a list that answers ${leftList26.status}`);
+    log(`  (${Date.now() - t26} ms; the widest ask in this step cost ${whole26.bytes} bytes and the narrowest ${one26.bytes}, on the same ${rows26(whole26).length} rows)`);
+  }
+}
+
 await capture.close();

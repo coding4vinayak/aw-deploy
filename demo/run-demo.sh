@@ -202,7 +202,16 @@ if [ -z "$KEY" ]; then
   exit 1
 fi
 
-API_KEY="$KEY" APP_BASE="http://localhost:$PORT" INBOUND_SECRET="${INBOUND_WEBHOOK_SIGNING_SECRET:-}" \
+# STEP 27 boots a throwaway second instance of the app against a Redis that is not there, so the
+# demo has to know both halves of the instance it is already running: the directory its build
+# lives in, and the database URL it reads its rows out of. The psql helpers fall back to the
+# shipped default, which is right for a stock `.env` and quietly wrong for anything else.
+if [ "$NAME" = "leadworks" ]; then
+  LEADWORKS_DB="${DATABASE_URL:-$(with_app_env "$REPOS_DIR/$APP" sh -c 'printf %s "${DATABASE_URL:-}"')}"
+  if [ -n "$LEADWORKS_DB" ]; then export DATABASE_URL="$LEADWORKS_DB"; fi
+fi
+
+API_KEY="$KEY" APP_BASE="http://localhost:$PORT" APP_DIR="${APP_DIR:-$REPOS_DIR/$APP}" INBOUND_SECRET="${INBOUND_WEBHOOK_SIGNING_SECRET:-}" \
 CONNECT_KEY="${CONNECT_KEY:-}" CONNECT_BASE="http://localhost:${CONNECT_PORT:-3400}" \
 FLOW_KEY="${FLOW_KEY:-}" FLOW_BASE="http://localhost:${FLOW_PORT:-3500}" \
 node "$DEMO_DIR/$SCRIPT"

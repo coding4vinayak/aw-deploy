@@ -288,6 +288,32 @@ vars, re-run the smoke sweep — then the suite is sellable.
 - **P2:** watch free→email→paid per tool; A/B cap thresholds; suppress
   non-openers after the breakup.
 
+## Connecting NuCRM — wire facts (measured against its `main`, 24 Oct 2026)
+
+- **Inbound (NuCRM → aw-abetapi):** the tenant admin creates an integration
+  webhook with only `{ url, events, secret }` — NuCRM has no custom-header
+  field. The bridge endpoint `POST /api/v1/inbound/nucrm/{source-id}`
+  authenticates on the HMAC signature alone; nothing else needs configuring.
+- **SSRF guard, both directions:** NuCRM delivers through `safeFetch`, which
+  refuses private, localhost and reserved targets on the first send *and* on
+  every retry. The bridge URL, and any AW-app webhook URL pointing *into*
+  NuCRM's plugin receiver (`/api/tenant/plugins/webhook/{id}`), must be
+  public HTTPS. Render satisfies this; the box needs a public reverse proxy
+  in front of the app — a `172.x`/`localhost` target is dead-lettered without
+  a request ever arriving.
+- **Freshness:** NuCRM's plugin receiver enforces a 5-minute window when
+  `x-webhook-timestamp` is sent (numeric seconds or ms) and skips the check
+  when absent. All fleet senders now include it, so point-in-time replays
+  die at NuCRM's door.
+- **Rate limits:** NuCRM's plugin receiver caps 60 req/min per plugin id
+  (429, no `Retry-After`). NuCRM's own deliveries time out after 10 s and
+  retry five times (5m/30m/2h/12h/24h) before its dead-letter queue —
+  retries replay the original signature over re-serialized JSONB bytes, so
+  receivers must dedupe on `x-nucrm-delivery`, not on re-verification.
+- **Auth when the fleet calls NuCRM:** `Authorization: Bearer <apiKey>`;
+  single-entity routes answer `{ "data": … }`, list routes
+  `{ data, total, offset, limit }`.
+
 ## Legacy tooling in this repo (not part of the deploy)
 
 `make_standalone_tools.mjs`, `deploy/check-parity.mjs`,

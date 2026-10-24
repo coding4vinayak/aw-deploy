@@ -1989,57 +1989,22 @@ const jobViaApi24 = async (id) => {
   try { return await (await fetch(`${API}/jobs/${id}`, { headers: H })).json(); } catch { return null; }
 };
 /** Every artifact `/tmp` holds whose own name was stamped at or after `from`. */
-const born24 = (from, ext) => readdirSync("/tmp")
-  .filter((f) => /^export_\d+\.(csv|json|xlsx|pdf)$/.test(f)
-    && (ext === undefined || [ext].flat().some((e) => f.endsWith(`.${e}`)))
-    && Number(/^export_(\d+)\./.exec(f)[1]) >= from)
+const born24 = (from) => readdirSync("/tmp")
+  .filter((f) => /^export_\d+\.(csv|json|xlsx|pdf)$/.test(f) && Number(/^export_(\d+)\./.exec(f)[1]) >= from)
   .map((f) => `/tmp/${f}`);
-/** Every `Export` row's file, read through the same connection this step counts its crowd with. */
-const namedRows24 = () => {
-  const raw = psql18('SELECT "filePath" FROM "Export" WHERE "filePath" IS NOT NULL', true);
-  return raw === null ? null : new Set(raw.split("\n").filter(Boolean));
-};
 /**
- * What #37's census asks: in the shape the stopped run was writing, born in this step's window,
- * still on the disk, and named by no row — where "named by no row" means after the write that
- * does the naming has had its chance to happen.
+ * What #37's census asks: born in this step's window, present on the disk, named by no export row.
  *
- * Three exclusions, each of them a rule this application already applies to itself:
- *
- * - **"born and present" alone is not the question.** An export that finished inside the window
- *   has a file the step deletes through its own door a moment later, and blaming it would blame
- *   #43 for a run nobody stopped.
- * - **`/tmp` is one directory shared by every leadworks this box runs**, and a census keyed to a
- *   wall clock cannot tell this instance's writer from a neighbour's. Only the extension the
- *   stopped run writes is blamed: a stopped run can leave nothing but bytes of its own format.
- * - **a path is built before the row that names it is stamped** — `IN_FLIGHT_GRACE_MS` in
- *   `lib/export-retention.ts` is the landed answer, and a sweep that ignores it accuses an export
- *   being born. So a candidate is re-read every 600 ms until a row names it, or the file is gone,
- *   or the budget runs out: a leak is still caught, twelve seconds later than the sweep that
- *   first saw it.
- *
- * `null` is the honest third answer: with the table unreadable the count cannot be made, and this
- * step says so instead of passing.
+ * "born and present" alone is not the question — an export that finished inside the window has a
+ * file on the disk that the step will delete through its own door a moment later, and counting it
+ * as residue would blame #43 for a run nobody stopped. `null` is the honest third answer: with the
+ * table unreadable, the count cannot be made, and this step says so instead of passing.
  */
-const unclaimed24 = async (from, ext, waitMs = 12000) => {
-  const born = born24(from, ext);
-  let named = namedRows24();
-  if (named === null) return null;
-  let pending = born.filter((path) => !named.has(path));
-  const told = [];
-  const until = Date.now() + waitMs;
-  while (pending.length > 0 && Date.now() < until) {
-    await new Promise((r) => setTimeout(r, 600));
-    named = namedRows24();
-    if (named === null) return null;
-    const still = [];
-    for (const path of pending) {
-      if (named.has(path) || !existsSync(path)) told.push(path);
-      else still.push(path);
-    }
-    pending = still;
-  }
-  return { unclaimed: pending, born, told, siblings: born24(from).length - born.length };
+const unclaimed24 = (from) => {
+  const namedRaw = psql18('SELECT "filePath" FROM "Export" WHERE "filePath" IS NOT NULL', true);
+  if (namedRaw === null) return null;
+  const named = new Set(namedRaw.split("\n").filter(Boolean));
+  return born24(from).filter((path) => existsSync(path) && !named.has(path));
 };
 const mk24 = async (format) => {
   const res = await fetch(`${API}/exports`, {
@@ -2162,14 +2127,13 @@ if (q24("SELECT 1") !== "1") {
     check(!!removedPath24 && !existsSync(removedPath24),
       "the run wrote a file, the mark outranked its own finish, and the bytes came back through the same guard the delete door asks — the worker says which path it took and it is not on the disk");
   }
-  const residue24 = await unclaimed24(mid24.from, "pdf");
+  const residue24 = unclaimed24(mid24.from);
   if (residue24 === null) {
     log("  the table is unreadable here, so this attempt's files cannot be told from the ones a finished export names — the claim above about the reclaimed path stands on the worker's own line.");
   } else {
-    log(`  ${residue24.told.length} PDF${residue24.told.length === 1 ? "" : "s"} born while this attempt ran were named by no row at the first sweep and a row names them now, or the file is gone: ${residue24.told.join(" ") || "none"}`);
-    log(`  still unclaimed after the grace the app's own sweep applies: ${residue24.unclaimed.length} (${residue24.unclaimed.join(" ") || "none"}); ${residue24.siblings} born in the window in another format are not this attempt's to be blamed for`);
-    check(residue24.unclaimed.length === 0,
-      `nothing a stopped run wrote is left to the disk (${residue24.unclaimed.length} unclaimed of ${residue24.born.length} born in the window in the shape it writes, ${residue24.told.length} told by a later row): a stopped export leaves no bytes that no row will ever name`);
+    log(`  files born since this attempt began that the disk still holds and no row names: ${residue24.length} (${residue24.join(" ") || "none"})`);
+    check(residue24.length === 0,
+      `nothing a stopped run wrote is left to the disk (${residue24.length} unclaimed of ${born24(mid24.from).length} born in the window): a stopped export leaves no bytes that no row will ever name`);
   }
 
   const retry24res = await fetch(`${API}/exports/${mid24.e.id}?action=retry`, { method: "POST", headers: H });
@@ -2207,12 +2171,12 @@ if (q24("SELECT 1") !== "1") {
   // disk until the delete door below takes them, and a residue count that ignored that would blame
   // a stopped export for a run nobody stopped.
   for (const filler of fillers24) await settleE24(filler.id, 90000);
-  const residueQueued24 = await unclaimed24(queueFrom24, "csv");
+  const residueQueued24 = unclaimed24(queueFrom24);
   if (residueQueued24 === null) {
     log("  with the table unreadable the before-the-bytes shape cannot be counted — this export's own row is read above, and it names no file.");
   } else {
-    log(`  files born since the queued export was created: ${residueQueued24.born.length} in the shape it writes and ${residueQueued24.siblings} in another, ${residueQueued24.unclaimed.length} of the first still named by no row after the grace (${residueQueued24.unclaimed.join(" ") || "none"}, ${residueQueued24.told.length} named by a row by the second sweep); its own export row names none`);
-    check(residueQueued24.unclaimed.length === 0 && deliveries24(queued24.id) === 0,
+    log(`  files born since the queued export was created: ${born24(queueFrom24).length} on the disk, ${residueQueued24.length} of them named by no row (${residueQueued24.join(" ") || "none"}); its own export row names none`);
+    check(residueQueued24.length === 0 && deliveries24(queued24.id) === 0,
       "the before-the-bytes shape leaves nothing to reclaim: the claim was refused, so no file was written and nothing was announced");
   }
   const delQueued24 = await fetch(`${API}/exports/${queued24.id}`, { method: "DELETE", headers: H });
@@ -2226,213 +2190,229 @@ if (q24("SELECT 1") !== "1") {
   const leftLeads24 = q24(`SELECT count(*) FROM "Lead" WHERE ${where24}`);
   const leftExports24 = q24(`SELECT count(*) FROM "Export" WHERE id IN ('${exports24.join("','")}')`);
   const leftJobs24 = q24(`SELECT count(*) FROM "Job" WHERE id IN ('${jobs24.join("','")}')`);
-  const residueStep24 = await unclaimed24(t24, ["pdf", "csv"]);
+  const residueStep24 = unclaimed24(t24);
   if (residueStep24 === null) {
     log("  and the step's own files cannot be recounted without the table; the door deleted every export row it tracked.");
   } else {
-    log(`  cleanup: ${goneLeads24} leads deleted, ${exports24.length} exports and ${jobs24.length} jobs deleted through their doors; of the ${residueStep24.born.length} files born in this step in a shape its stopped runs write, ${residueStep24.unclaimed.length} are unclaimed (${residueStep24.unclaimed.join(" ") || "none"}) and ${residueStep24.told.length} were named by a row, or gone, by the second sweep; ${residueStep24.siblings} born in another format are not this step's to blame`);
+    log(`  cleanup: ${goneLeads24} leads deleted, ${exports24.length} exports and ${jobs24.length} jobs deleted through their doors, ${residueStep24.length} of this step's files left unclaimed on disk (${residueStep24.join(" ") || "none"})`);
   }
   check(Number(leftLeads24) === 0 && leftExports24 === "0" && leftJobs24 === "0"
-    && (residueStep24 === null || residueStep24.unclaimed.length === 0),
-    `the step leaves nothing behind: ${leftLeads24} crowd leads, ${leftExports24} export rows, ${leftJobs24} job rows and ${residueStep24 === null ? "?" : residueStep24.unclaimed.length} files`);
+    && (residueStep24 === null || residueStep24.length === 0),
+    `the step leaves nothing behind: ${leftLeads24} crowd leads, ${leftExports24} export rows, ${leftJobs24} job rows and ${residueStep24 === null ? "?" : residueStep24.length} files`);
   log("  left alone, still by name: `lib/scraper.ts` does not consult the mark, so a cancelled scrape still runs to its own end; and a stop that lands while the crowd query is open is only seen at the boundary after it, which is why the row's `totalItems` is the whole crowd with nothing processed.");
   await fetch(`${API}/webhooks/${sub24.id}`, { method: "DELETE", headers: H });
 }
 
-log("\n═══ STEP 25 — a dynamic list re-runs the filter it declares, and the crowd it names becomes the membership (#44) ═══");
-// `LeadList` has carried two columns since its first migration — `isDynamic Boolean @default(false)`
-// and `filterJson Json? // Filter criteria for dynamic lists` — and both were sold by the create and
-// edit doors. Nothing read either one. The single door that could act on them answered, measured on
-// the running app before this round:
+
+log("\n═══ STEP 25 — a list of 150 members answers a page of them, and says which page (#45) ═══");
+// Measured against the running app before this round, on a static list the import door had
+// just filled with exactly 150 members:
 //
-//   POST /api/lead-lists/{id}?action=refresh {isDynamic:true}
-//     -> 200 {"ok":true,"message":"Dynamic list refresh not fully implemented"}
+//   GET /api/lead-lists/{id}                 -> 200, members.length 100, 163031 bytes
+//   GET /api/lead-lists/{id}?limit=5&page=3  -> 200, members.length 100, the same bytes
+//   GET /api/lead-lists/{id}?page=99         -> 200, members.length 100, the same bytes
+//   GET /api/lead-lists                      -> the same list, `_count: { members: 150 }`
 //
-// with the membership unchanged on both sides of it, a `?action=refresh` *without* the flag a
-// `400 "Unknown action"` (the branch obeyed the caller's body, not the row), and
-// `filterJson: { a: 1 }`, `filterJson: []` and `filterJson: 42` all stored as 201.
+// `take: 100` was a ceiling on the answer, not the size of a page. Nobody read the query
+// string, so `?page=` and `?limit=` were accepted and thrown away; the members had no
+// `orderBy`, so which hundred came back was the database's business; and the answer held no
+// total at all — the only number that said 150 lived on a different route. A buyer who reads
+// their list once and pushes it into a campaign sends a hundred people and is never told the
+// other fifty exist, and the hundred they got could be a different hundred on the next call.
+//
+// The door now answers the question it was asked: `memberPage.recorded` is counted by the
+// database over the whole membership, `members` comes back in `leadId` order at the page and
+// limit the caller named, and `truncated` is the word that separates "this is all of them"
+// from "there is a next one". The three-field vocabulary is the one a finished job already
+// uses for the same hazard (`results.recorded/returned/truncated` in `lib/job-report.ts`), so
+// a caller that learned it at one door has it at this one.
 const q25 = (sql) => psql18(sql, true)?.trim();
-const dbOk25 = q25("SELECT 1") === "1";
-const TAG25 = `dyn44-${RUN}`;
-const crowd25 = [];
-const lists25 = [];
-const answers25 = [];
-const getJson25 = async (id) => {
-  const res = await fetch(`${API}/lead-lists/${id}`, { headers: H });
-  return { http: res.status, body: await res.json().catch(() => ({})) };
+const CROWD25 = 150;
+const tag25 = `page45${RUN}`;
+const where25 = `"email" LIKE '${tag25}.%@crowd.test'`;
+const born25 = (from) => readdirSync("/tmp")
+  .filter((f) => /^export_\d+\.(csv|json|xlsx|pdf)$/.test(f) && Number(/^export_(\d+)\./.exec(f)[1]) >= from)
+  .map((f) => `/tmp/${f}`);
+const cols25 = (table) => {
+  const raw = q25(`SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='${table}' ORDER BY column_name`);
+  return raw === null ? null : raw.split("\n").filter(Boolean);
 };
-const memberRows25 = async (id) => (q25(`SELECT string_agg("leadId", ',' ORDER BY "leadId") FROM "LeadListMember" WHERE "listId"='${id}'`) ?? "").split(",").filter(Boolean);
-const refresh25 = async (id, label, body) => {
-  const res = await fetch(`${API}/lead-lists/${id}?action=refresh`, { method: "POST", headers: H, body: JSON.stringify(body ?? {}) });
-  const text = await res.text();
-  let json = {};
-  try { json = JSON.parse(text); } catch { json = { raw: text }; }
-  if (typeof json.matched === "number") answers25.push({ label, ...json });
-  log(`  refresh ${label} -> ${res.status} ${text.slice(0, 150)}`);
-  return { http: res.status, ...json };
-};
-const nameIds25 = (where) => (q25(`SELECT string_agg(id, ',' ORDER BY id) FROM "Lead" WHERE ${where} AND tags @> '["${TAG25}"]'::jsonb`) ?? "").split(",").filter(Boolean);
-const createList25 = async (label, body) => {
-  const res = await fetch(`${API}/lead-lists`, { method: "POST", headers: H, body: JSON.stringify(body) });
-  const text = await res.text();
-  let json = {};
-  try { json = JSON.parse(text); } catch { json = { raw: text }; }
-  log(`  POST /lead-lists ${label} -> ${res.status} ${text.slice(0, 150)}`);
-  return { http: res.status, ...json };
-};
+{
+  const t25 = Date.now();
+  const crowdRaw25 = q25(`SELECT id FROM "Lead" WHERE ${where25} ORDER BY id`);
+  if (crowdRaw25 === null) {
+    log("  this step's crowd is 150 rows the import door wrote without naming them, and the only door that can name them is the table. With `psql` unreachable the ids — and so the membership — do not exist, which means the step cannot be measured here rather than passed.");
+  } else {
+    // Every read below happens after this one succeeded, so the table stays readable for the
+    // step's SQL cross-checks; `psql18` latches the failure and would return null forever after.
+    const ids25 = crowdRaw25.split("\n").filter(Boolean);
 
-if (!dbOk25) {
-  log("  psql is unreachable here, so this step cannot name the crowd it is about to claim, and is skipped rather than passed.");
-} else {
-  const listsBefore25 = q25(`SELECT count(*) FROM "LeadList"`);
-  const membersBefore25 = q25(`SELECT count(*) FROM "LeadListMember"`);
+    const csv25 = [
+      "email,first name,last name,company,title,tags",
+      ...Array.from({ length: CROWD25 }, (_, i) => `${tag25}.${i}@crowd.test,Member${i},Surname${i},Crowd Estates ${i % 9},Property Owner,${tag25}`),
+    ].join("\n");
+    const imp25 = await (await fetch(`${API}/leads/import`, {
+      method: "POST", headers: { authorization: "Bearer " + KEY, "content-type": "text/csv" }, body: csv25,
+    }));
+    const impBody25 = await imp25.json();
+    log(`  POST /api/leads/import ${CROWD25} rows -> ${imp25.status} imported=${impBody25.imported} invalid=${impBody25.invalid} duplicatesInFile=${impBody25.duplicatesInFile}`);
+    check(imp25.status === 201 && impBody25.imported === CROWD25 && impBody25.invalid === 0,
+      `the crowd is ${CROWD25} rows the import door wrote in one request`);
+    const idsNow25 = q25(`SELECT id FROM "Lead" WHERE ${where25} ORDER BY id`).split("\n").filter(Boolean);
+    check(idsNow25.length === CROWD25 && new Set(idsNow25).size === CROWD25,
+      `and the table holds exactly ${idsNow25.length} of them, all distinct, under this run's address`);
 
-  // The crowd: six leads the step owns, three of them moved to QUALIFIED through the lead's own
-  // door (`POST /api/leads` always makes a NEW row), two of them C_LEVEL. A tag nobody else in the
-  // workspace holds makes every number below the step's own, so `matched` is checkable against the
-  // table rather than against whatever the seed happened to leave behind.
-  for (let i = 0; i < 6; i++) {
-    const made = await (await fetch(`${API}/leads`, {
-      method: "POST", headers: H,
-      body: JSON.stringify({
-        firstName: `Dynamic ${i}`, lastName: "Crowd", email: `${TAG25}.${i}@crowd.test`,
-        company: "Dynamic Estates", title: i < 2 ? "Founder & CEO" : "VP Sales",
-        seniority: i < 2 ? "C_LEVEL" : "VP", tags: [TAG25],
-      }),
-    })).json();
-    if (made.id) crowd25.push(made.id);
+    const made25 = await (await fetch(`${API}/lead-lists`, {
+      method: "POST", headers: H, body: JSON.stringify({ name: `${tag25} crowd`, isDynamic: false }),
+    }));
+    const list25 = await made25.json();
+    log(`  POST /api/lead-lists -> ${made25.status} ${JSON.stringify({ id: list25.id, name: list25.name, isDynamic: list25.isDynamic })}`);
+    check(made25.status === 201 && typeof list25.id === "string" && list25.isDynamic === false,
+      "a static list: the crowd is rows someone put in, not a filter re-evaluated on refresh");
+
+    const overflow25 = await fetch(`${API}/lead-lists/${list25.id}?action=add-leads`, {
+      method: "POST", headers: H, body: JSON.stringify({ leadIds: idsNow25 }),
+    });
+    const overflowBody25 = await overflow25.json();
+    log(`  one POST naming all ${idsNow25.length} ids -> ${overflow25.status} ${String(overflowBody25.error ?? "").slice(0, 80)}`);
+    check(overflow25.status >= 400 && /at most/.test(String(overflowBody25.error ?? "")),
+      "the write door keeps its own cap on one request — a membership of 150 is filled in pages, and the refusal says the number rather than writing half of it");
+    const filled25 = [];
+    for (let off = 0; off < CROWD25; off += 100) {
+      const res = await fetch(`${API}/lead-lists/${list25.id}?action=add-leads`, {
+        method: "POST", headers: H, body: JSON.stringify({ leadIds: idsNow25.slice(off, off + 100) }),
+      });
+      filled25.push(res.status);
+    }
+    log(`  add-leads in ${filled25.length} calls of at most 100 -> ${filled25.join(", ")}`);
+    check(filled25.every((s) => s === 200), `and the list is filled through the door that exists (${filled25.join("/")})`);
+    const members25 = Number(q25(`SELECT count(*) FROM "LeadListMember" WHERE "listId"='${list25.id}'`));
+    check(members25 === CROWD25, `the table says the membership is ${members25} rows`);
+
+    const typo25 = await fetch(`${API}/lead-lists/${list25.id}?action=add-leads`, {
+      method: "POST", headers: H, body: JSON.stringify({ leadIds: [`${tag25}isnotalead`] }),
+    });
+    const typoBody25 = await typo25.json();
+    log(`  add-leads with one id nobody has -> ${typo25.status} ${JSON.stringify(typoBody25).slice(0, 110)}`);
+    check(typo25.status === 422 && Array.isArray(typoBody25.unknownIds) && typoBody25.unknownIds[0] === `${tag25}isnotalead`,
+      "and an id the workspace does not have is named, not a 500 from the foreign key");
+
+    const readList25 = async (query) => {
+      const res = await fetch(`${API}/lead-lists/${list25.id}${query}`, { headers: H });
+      const text = await res.text();
+      let body = null;
+      try { body = JSON.parse(text); } catch { /* a non-JSON answer is itself the finding */ }
+      return { status: res.status, bytes: Buffer.byteLength(text), body };
+    };
+    const idsOf25 = (answer) => (answer?.body?.members ?? []).map((m) => m.leadId);
+
+    const first25 = await readList25("");
+    const mp125 = first25.body?.memberPage;
+    log(`  GET /api/lead-lists/{id} -> ${first25.status} ${first25.bytes} bytes, members=${idsOf25(first25).length}`);
+    log(`  memberPage = ${JSON.stringify(mp125)}`);
+    check(first25.status === 200 && mp125?.recorded === CROWD25 && idsOf25(first25).length === 100
+      && mp125?.returned === 100 && mp125?.page === 1 && mp125?.limit === 100
+      && mp125?.totalPages === 2 && mp125?.truncated === true,
+      "a caller who asked for nothing gets the page this door has always handed — 100 of them — and is now told 150 were recorded and the answer is truncated");
+    const greedy25 = await readList25("?limit=999999");
+    log(`  page 1 is ${first25.bytes} bytes; the same URL on a 150-member list before the round answered 163031 bytes of probe rows — all it could answer, since it had no page and no total`);
+    check(greedy25.bytes === first25.bytes && idsOf25(greedy25).join(",") === idsOf25(first25).join(","),
+      `and asking for ${"limit=999999"} in one call buys the same ${idsOf25(first25).length} rows and the same ${greedy25.bytes} bytes — the page size is a ceiling on a call now, where 100 was a ceiling on the answer`);
+
+    const third25 = await readList25("?limit=5&page=3");
+    const mp325 = third25.body?.memberPage;
+    const want325 = q25(`SELECT id FROM "Lead" WHERE ${where25} ORDER BY id LIMIT 5 OFFSET 10`).split("\n").filter(Boolean);
+    log(`  GET ?limit=5&page=3 -> ${third25.status} ${third25.bytes} bytes, members=${idsOf25(third25).join(", ")}`);
+    log(`  memberPage = ${JSON.stringify(mp325)}`);
+    check(third25.status === 200 && idsOf25(third25).join(",") === want325.join(",")
+      && mp325?.page === 3 && mp325?.limit === 5 && mp325?.recorded === CROWD25
+      && mp325?.totalPages === 30 && mp325?.truncated === true,
+      "the query string is read: page 3 of fifths is the three through five rows of the membership in `leadId` order, and the total is still the whole 150");
+    check(idsOf25(third25).join(",") !== idsOf25(first25).slice(0, 5).join(",") && third25.bytes !== first25.bytes,
+      "which is the finding the old door could not make: two different query strings are two different answers");
+
+    const second25 = await readList25("?page=2");
+    const tiled25 = [...idsOf25(first25), ...idsOf25(second25)];
+    check(idsOf25(second25).length === 50 && new Set(tiled25).size === CROWD25
+      && idsOf25(first25).every((id) => !idsOf25(second25).includes(id)),
+      `page 1 and page 2 at the default size tile the crowd: ${idsOf25(first25).length} + ${idsOf25(second25).length} = ${tiled25.length} with no member on two pages and none missed`);
+    check(tiled25.join(",") === idsNow25.join(","),
+      "and the pages concatenated are the table's own `ORDER BY id` — the order is stated, not whatever the heap produced");
+
+    const small25 = [];
+    for (let page = 1; page <= 3; page++) small25.push(...idsOf25(await readList25(`?limit=50&page=${page}`)));
+    check(small25.length === CROWD25 && new Set(small25).size === CROWD25 && small25.join(",") === idsNow25.join(","),
+      `and at 50 a page the same crowd arrives in ${small25.length / 50} calls: a different page size is a different cut of one ordered membership, not a different crowd`);
+    const again25 = idsOf25(await readList25("?limit=50&page=2"));
+    check(again25.join(",") === idsOf25(await readList25("?limit=50&page=2")).join(","),
+      "two calls of one URL return the same rows in the same order — the determinism the caller can cache on");
+
+    const beyond25 = await readList25("?page=99");
+    const mpOut25 = beyond25.body?.memberPage;
+    log(`  GET ?page=99 -> ${beyond25.status} members=${idsOf25(beyond25).length} memberPage=${JSON.stringify(mpOut25)}`);
+    check(beyond25.status === 200 && idsOf25(beyond25).length === 0 && mpOut25?.returned === 0
+      && mpOut25?.truncated === false && mpOut25?.recorded === CROWD25 && mpOut25?.totalPages === 2,
+      "a page past the end is empty and says so: `truncated:false` there means the page ran out, because `recorded` still says the crowd is 150 and unmoved");
+
+    const big25 = await readList25("?limit=999999&page=2");
+    log(`  GET ?limit=999999&page=2 -> ${big25.status} members=${idsOf25(big25).length} memberPage=${JSON.stringify(big25.body?.memberPage)}`);
+    check(idsOf25(big25).length === 50 && big25.body?.memberPage?.limit === 100
+      && big25.body?.memberPage?.truncated === false,
+      "an impossible page size is clamped to the largest page this door will hand (100), so page 2 is the 50 that are left rather than a full-table read");
+
+    for (const junk25 of ["?page=0", "?page=-2", "?page=abc", "?page=1.7", "?limit=0", "?limit=-1", "?limit=abc"]) {
+      const ans25 = await readList25(junk25);
+      const mp25 = ans25.body?.memberPage;
+      const want25 = junk25.startsWith("?page") ? 1 : 100;
+      const got25 = junk25.startsWith("?page") ? mp25?.page : mp25?.limit;
+      check(ans25.status === 200 && got25 === want25 && idsOf25(ans25).length === 100,
+        `${junk25} falls back to the door's own number (${junk25.startsWith("?page") ? "page" : "limit"}=${want25}) instead of a 500 from a negative skip or a NaN take`);
+    }
+
+    const recorded25 = Number(q25(`SELECT count(*) FROM "LeadListMember" WHERE "listId"='${list25.id}'`));
+    check(recorded25 === mp125?.recorded && recorded25 === CROWD25,
+      `the total in the answer is the table's own count of the membership (${recorded25})`);
+    const collection25 = await (await fetch(`${API}/lead-lists?limit=100`, { headers: H })).json();
+    const rowInCollection25 = (collection25.lists ?? []).find((l) => l.id === list25.id);
+    log(`  GET /api/lead-lists -> this list's \`_count.members\` = ${rowInCollection25?._count?.members} against the detail door's \`recorded\` = ${mp125?.recorded}`);
+    check(rowInCollection25?._count?.members === mp125?.recorded,
+      "the collection door and the detail door agree on this list's size — which they could not before, because only the collection one had a number");
+
+    const columns25 = cols25("LeadList");
+    const memberColumns25 = cols25("LeadListMember");
+    const topKeys25 = Object.keys(first25.body ?? {}).sort();
+    const wantTop25 = [...(columns25 ?? []), "members", "memberPage"].sort();
+    log(`  top-level keys: ${topKeys25.join(" ")}`);
+    check(columns25 !== null && topKeys25.join(",") === wantTop25.join(","),
+      "nothing the old answer carried was renamed or dropped: the row's own columns, `members`, and the one key the round added");
+    const memberKeys25 = Object.keys(first25.body?.members?.[0] ?? {}).sort();
+    const wantMember25 = [...(memberColumns25 ?? []), "lead"].sort();
+    check(memberColumns25 !== null && memberKeys25.join(",") === wantMember25.join(","),
+      `a member is still the member it was (${memberKeys25.join(", ")}) — the lead is still reachable at \`members[i].lead.email\``);
+    check(JSON.stringify(mp125) === JSON.stringify({ recorded: 150, returned: 100, page: 1, limit: 100, totalPages: 2, truncated: true }),
+      "and `memberPage` is exactly the six fields, in the order the code writes them: recorded, returned, page, limit, totalPages, truncated");
+
+    const gone25 = await fetch(`${API}/lead-lists/list_no_such_list_${RUN}`, { headers: H });
+    const goneBody25 = await gone25.json();
+    log(`  GET a list that does not exist -> ${gone25.status} ${JSON.stringify(goneBody25)}`);
+    check(gone25.status === 404 && goneBody25.error === "Not found" && goneBody25.memberPage === undefined,
+      "a list nobody has is still a 404 before any counting: no total is reported for a row that does not exist");
+
+    const del25 = await fetch(`${API}/lead-lists/${list25.id}`, { method: "DELETE", headers: H });
+    const afterDelete25 = await readList25("");
+    log(`  DELETE the list -> ${del25.status}; GET it -> ${afterDelete25.status}`);
+    check(del25.status === 200 && afterDelete25.status === 404,
+      "and the door that deletes a list deletes it: the membership page goes with the row, not a page of members nobody owns");
+    const leftMembers25 = q25(`SELECT count(*) FROM "LeadListMember" WHERE "listId"='${list25.id}'`);
+    const leftList25 = q25(`SELECT count(*) FROM "LeadList" WHERE id='${list25.id}'`);
+    const goneLeads25 = q25(`WITH d AS (DELETE FROM "Lead" WHERE ${where25} RETURNING id) SELECT count(*) FROM d`);
+    const leftLeads25 = q25(`SELECT count(*) FROM "Lead" WHERE ${where25}`);
+    const bornFiles25 = born25(t25);
+    log(`  cleanup: ${leftList25} list row, ${leftMembers25} membership rows, ${goneLeads25} leads deleted and ${leftLeads25} left, ${bornFiles25.length} files of this step's window (${bornFiles25.join(" ") || "none"})`);
+    check(leftList25 === "0" && leftMembers25 === "0" && Number(leftLeads25) === 0 && bornFiles25.length === 0,
+      `the step leaves nothing behind: ${leftLeads25} crowd leads, ${leftMembers25} membership rows, ${leftList25} list rows and ${bornFiles25.length} files — a read round writes no file`);
+    log("  left alone, still by name: `recorded` and the collection door's `_count.members` are two reads of one table and are not reconciled against what the page holds — a member deleted between the count and the page is a `recorded` one row too high; and the cap on one `add-leads` request (the write door's, at 100) is a different number from the page size this round set, so filling a big list is still a loop the caller writes.");
   }
-  check(crowd25.length === 6, `the crowd is six leads the intake door wrote (got ${crowd25.length})`);
-  for (const id of [crowd25[3], crowd25[4], crowd25[5]]) {
-    const moved = await fetch(`${API}/leads/${id}`, { method: "PATCH", headers: H, body: JSON.stringify({ status: "QUALIFIED" }) });
-    check(moved.status === 200, `PATCH /leads/${id.slice(-4)} status QUALIFIED -> ${moved.status}`);
-  }
-  const qualified25 = q25(`SELECT count(*) FROM "Lead" WHERE status='QUALIFIED' AND tags @> '["${TAG25}"]'::jsonb`);
-  const cLevel25 = q25(`SELECT count(*) FROM "Lead" WHERE "seniority"='C_LEVEL' AND tags @> '["${TAG25}"]'::jsonb`);
-  log(`     the table says ${qualified25} of the crowd is QUALIFIED and ${cLevel25} is C_LEVEL — every number this step prints is checked against that`);
-
-  // A door sells a column, so it has to refuse what the column can never run.
-  const refusals25 = [
-    ["{isDynamic:true} alone", { name: `refuse44-flag-${TAG25}`, isDynamic: true }],
-    ["a key no Lead column holds", { name: `refuse44-key-${TAG25}`, isDynamic: true, filterJson: { department: "Ops" } }],
-    ["filterJson []", { name: `refuse44-array-${TAG25}`, isDynamic: true, filterJson: [] }],
-    ["filterJson 42", { name: `refuse44-number-${TAG25}`, isDynamic: true, filterJson: 42 }],
-  ];
-  for (const [label, body] of refusals25) {
-    const refused = await createList25(label, body);
-    check(refused.http === 400 && typeof refused.error === "string", `${label} is refused with a sentence, not stored as 201`);
-  }
-  const storedJunk25 = q25(`SELECT count(*) FROM "LeadList" WHERE name LIKE 'refuse44-%'`);
-  check(storedJunk25 === "0", `and none of the four left a row: ${storedJunk25} lists named refuse44-* in the table`);
-  const flagSentence25 = await createList25("the flag's own sentence", { name: `refuse44-flag2-${TAG25}`, isDynamic: true });
-  check(/declares the filter it re-runs/.test(String(flagSentence25.error)), "the refusal says what a dynamic list owes: the filter it will re-run");
-
-  const listA25 = await createList25("a real filter", { name: `dyn44-A-${TAG25}`, isDynamic: true, filterJson: { status: ["QUALIFIED"], tags: [TAG25] } });
-  lists25.push(listA25.id);
-  check(listA25.http === 201 && String(listA25.filterJson?.status) === "QUALIFIED" && String(listA25.filterJson?.tags) === TAG25,
-    "the stored filter is the normalized one: a scalar becomes the array the reader walks");
-
-  const fresh25 = await getJson25(listA25.id);
-  log(`  GET before any refresh -> ${fresh25.http} members=${(fresh25.body.members ?? []).length}`);
-  check((fresh25.body.members ?? []).length === 0, "a list that declares a crowd holds none of it until the door re-runs the filter");
-
-  const first25 = await refresh25(listA25.id, "#1 (the crowd as it stands)");
-  const firstRows25 = await memberRows25(listA25.id);
-  const qualifiedIds25 = nameIds25(`status='QUALIFIED'`);
-  log(`     the table holds ${firstRows25.length} rows; the filter's own words name ${qualifiedIds25.length} leads`);
-  check(first25.http === 200 && first25.matched === qualifiedIds25.length && first25.added === qualifiedIds25.length && first25.removed === 0 && first25.kept === 0,
-    `the answer is the crowd's arithmetic: matched=${first25.matched} added=${first25.added} removed=${first25.removed} kept=${first25.kept}`);
-  check(String(firstRows25) === String(qualifiedIds25), "and the ids in the table are the ids the filter names, row for row");
-  check(/status QUALIFIED, tagged/.test(String(first25.filter)), `the answer quotes the filter it ran: "${first25.filter}"`);
-
-  const second25 = await refresh25(listA25.id, "#2 (crowd unmoved)");
-  check(second25.matched === qualifiedIds25.length && second25.added === 0 && second25.removed === 0 && second25.kept === qualifiedIds25.length,
-    `the same filter over the same crowd is a no-op: added=${second25.added} removed=${second25.removed} kept=${second25.kept}`);
-
-  const handAdd25 = await fetch(`${API}/lead-lists/${listA25.id}?action=add-leads`, { method: "POST", headers: H, body: JSON.stringify({ leadIds: [crowd25[0]] }) });
-  const midRows25 = await memberRows25(listA25.id);
-  log(`  POST ?action=add-leads a NEW lead the filter does not name -> ${handAdd25.status}; the table now holds ${midRows25.length} rows`);
-  check(midRows25.length === qualifiedIds25.length + 1, "an operator can still put a lead in by hand — the add door does not police a dynamic list");
-  const third25 = await refresh25(listA25.id, "#3 (a hand-added member)");
-  check(third25.removed === 1 && third25.kept === qualifiedIds25.length && String(await memberRows25(listA25.id)) === String(qualifiedIds25),
-    `the refresh is the authority for a dynamic list: it took the hand-added row back (removed=${third25.removed}) and kept the crowd it names`);
-
-  await fetch(`${API}/leads/${crowd25[0]}`, { method: "PATCH", headers: H, body: JSON.stringify({ status: "QUALIFIED" }) });
-  await fetch(`${API}/leads/${crowd25[3]}`, { method: "PATCH", headers: H, body: JSON.stringify({ status: "CONTACTED" }) });
-  const movedIds25 = nameIds25(`status='QUALIFIED'`);
-  const fourth25 = await refresh25(listA25.id, "#4 (one lead in, one out)");
-  const fourthRows25 = await memberRows25(listA25.id);
-  check(fourth25.added === 1 && fourth25.removed === 1 && fourth25.kept === qualifiedIds25.length - 1 && String(fourthRows25) === String(movedIds25),
-    `the list follows the crowd both ways: added=${fourth25.added} removed=${fourth25.removed} kept=${fourth25.kept}, and the rows are the ${movedIds25.length} the filter names now`);
-
-  const fifth25 = await refresh25(listA25.id, "#5 (again, unmoved)");
-  check(fifth25.added === 0 && fifth25.removed === 0 && fifth25.kept === movedIds25.length, "and it settles: the crowd has not moved, so nothing is written");
-
-  // A second list, filtering the same crowd by a different attribute, with the filter written as a
-  // scalar. Two lists over one workspace hold their own memberships: neither refresh touches the other.
-  const listB25 = await createList25("seniority as a scalar", { name: `dyn44-B-${TAG25}`, isDynamic: true, filterJson: { seniority: "c_level", tags: [TAG25] } });
-  lists25.push(listB25.id);
-  const bFirst25 = await refresh25(listB25.id, "B#1 (seniority, not status)");
-  const cLevelIds25 = nameIds25(`"seniority"='C_LEVEL'`);
-  check(bFirst25.matched === cLevelIds25.length && String(await memberRows25(listB25.id)) === String(cLevelIds25),
-    `a filter on a different attribute selects a different crowd — ${bFirst25.matched} C_LEVEL leads — through the same reader`);
-  const aAfterB25 = await memberRows25(listA25.id);
-  check(String(aAfterB25) === String(movedIds25), `and B's refresh did not move A's ${aAfterB25.length} rows: membership is per list`);
-
-  const patchB25 = await fetch(`${API}/lead-lists/${listB25.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ filterJson: { status: "QUALIFIED", tags: [TAG25] } }) });
-  const patchedB25 = await patchB25.json();
-  log(`  PATCH the filter on a live dynamic list -> ${patchB25.status} filterJson=${JSON.stringify(patchedB25.filterJson)}`);
-  check(patchB25.status === 200 && String(patchedB25.filterJson?.status) === "QUALIFIED", "the edit door stores the normalized filter it was handed");
-  const bSecond25 = await refresh25(listB25.id, "B#2 (after the PATCH)");
-  const bRows25 = await memberRows25(listB25.id);
-  check(bSecond25.matched === movedIds25.length && String(bRows25) === String(movedIds25),
-    `the row re-runs the filter it now holds, not the one it was made with: matched=${bSecond25.matched} added=${bSecond25.added} removed=${bSecond25.removed} kept=${bSecond25.kept}`);
-
-  for (const a of answers25) {
-    check(a.matched === a.kept + a.added && a.members === a.matched,
-      `the arithmetic of "${a.label}" closes: matched ${a.matched} = kept ${a.kept} + added ${a.added}, and the answer's member count is the crowd size`);
-  }
-
-  // The static list: the flag is a column, so typing it in the body cannot make a row dynamic.
-  const listC25 = await createList25("a static list", { name: `dyn44-C-${TAG25}`, isDynamic: false });
-  lists25.push(listC25.id);
-  check(listC25.http === 201 && listC25.isDynamic === false && listC25.filterJson === null, "a static list is stored as one: false, and no filter");
-  const obeyBody25 = await refresh25(listC25.id, "C (static, told to be dynamic by the body)", { isDynamic: true });
-  const plainStatic25 = await refresh25(listC25.id, "C (static, no body)", {});
-  check(obeyBody25.http === 400 && plainStatic25.http === 400 && obeyBody25.error === plainStatic25.error,
-    "the same 400 either way: the branch asks the row, and the caller's flag is not a column");
-  check(/isDynamic.*false/.test(String(obeyBody25.error)) && /operator/.test(String(obeyBody25.error)),
-    "and it says whose members they are — an operator's, not a filter's");
-  const flagOnlyPatch25 = await (await fetch(`${API}/lead-lists/${listC25.id}`, { method: "PATCH", headers: H, body: JSON.stringify({ isDynamic: true }) })).json();
-  log(`  PATCH {isDynamic:true} onto a filterless row -> 400 ${String(flagOnlyPatch25.error).slice(0, 120)}`);
-  check(/declares no filter/.test(String(flagOnlyPatch25.error)), "the edit door refuses to make a list dynamic with nothing to re-run, so no row can be made un-refreshable");
-
-  // Two rows the create and edit doors will not make, written straight to the column, to show the
-  // refresh door reads what is stored rather than trusting that it was written through itself.
-  const junked25 = q25(`WITH u AS (UPDATE "LeadList" SET "isDynamic"=true, "filterJson"='{"department":"Ops"}'::jsonb WHERE id='${listC25.id}' RETURNING 1) SELECT count(*) FROM u`);
-  log(`  the column forced by SQL (a row no door would write): isDynamic=true, filterJson={"department":"Ops"}, ${junked25} row updated`);
-  const junkRefresh25 = await refresh25(listC25.id, "C (a stored filter no lead can be)");
-  check(junkRefresh25.http === 409 && /cannot be re-run as written/.test(String(junkRefresh25.error)) && /department/.test(String(junkRefresh25.error)),
-    "a filter the column holds but no lead can be is a 409 quoting the row's own state, not a 200 claiming a refresh");
-  const nulled25 = q25(`WITH u AS (UPDATE "LeadList" SET "filterJson"=NULL WHERE id='${listC25.id}' RETURNING 1) SELECT count(*) FROM u`);
-  log(`  the same row with the column emptied by SQL, ${nulled25} row updated`);
-  const emptyRefresh25 = await refresh25(listC25.id, "C (dynamic, column empty)");
-  check(emptyRefresh25.http === 409 && /declares no filter to re-run/.test(String(emptyRefresh25.error)),
-    "and a dynamic row whose column is empty is refused the same way, for the other reason");
-  const refusedRows25 = await memberRows25(listC25.id);
-  check(refusedRows25.length === 0, "neither refusal wrote a member: the 409 is the whole answer");
-
-  log("  what this step does not claim: nothing re-runs by itself. A lead's status moving does not touch a list until someone posts the refresh door — there is no trigger, no scheduler entry and no queue message for it, and `GET /api/lead-lists/{id}` lists at most 100 members whatever the table holds.");
-  log("  left alone on purpose: the filter vocabulary is the rule's (`status`, `seniority`, `score`, `tags`), so a list borrows the reader a rule already had rather than a second grammar that can drift; and a static list keeps its hand-made membership — this round only made `isDynamic` mean something when it is true.");
-
-  for (const id of lists25) await fetch(`${API}/lead-lists/${id}`, { method: "DELETE", headers: H });
-  for (const id of crowd25) await fetch(`${API}/leads/${id}`, { method: "DELETE", headers: H });
-  const listsLeft25 = q25(`SELECT count(*) FROM "LeadList"`);
-  const membersLeft25 = q25(`SELECT count(*) FROM "LeadListMember"`);
-  const crowdLeft25 = q25(`SELECT count(*) FROM "Lead" WHERE tags @> '["${TAG25}"]'::jsonb`);
-  log(`  cleanup: ${lists25.length} lists and ${crowd25.length} crowd leads deleted through the doors`);
-  check(listsLeft25 === listsBefore25 && membersLeft25 === membersBefore25 && crowdLeft25 === "0",
-    `the workspace is back to where the step found it: ${listsBefore25} → ${listsLeft25} lists, ${membersBefore25} → ${membersLeft25} memberships, ${crowdLeft25} crowd leads left`);
 }
 
 await capture.close();

@@ -26,7 +26,7 @@
 import { startCapture } from "./capture.mjs";
 import crypto from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 
 const { API_KEY: KEY, APP_BASE = "http://localhost:3300", HOOK_PORT = "3799" } = process.env;
 if (!KEY) throw new Error("API_KEY env var missing (run-demo.sh mints it)");
@@ -2406,6 +2406,240 @@ function assert25Equal(actual, expected, message) {
   if (a !== e) {
     log(`    only in the answer: ${actual.filter((k) => !expected.includes(k)).join(", ") || "none"}; only in the table: ${expected.filter((k) => !actual.includes(k)).join(", ") || "none"}`);
     process.exitCode = 1;
+  }
+}
+
+log("\n═══ STEP 27 — the queue refuses, the door answers, and the row says which voice it heard (#50) ═══");
+// Seven doors in this application insert a `Job` row and then hand it to the queue. All seven
+// caught `QueueUnavailableError` and answered 503 with "the work is saved, retry shortly".
+// Measured on a running instance with its own Redis turned off, that sentence was false in both
+// of its halves: no 503 arrived at all — every door answered `500` with a zero-byte body, because
+// `lib/queue.ts` classified the rejection by `error.message` while ioredis rejects with an
+// `AggregateError` whose own message is the empty string — and the row was not "saved" in a state
+// anybody could act on. Eleven rows stayed `PENDING` and stayed there through 150 seconds of a
+// healthy queue, because a `PENDING` row is not an unstarted job: `retryAsk` answers 409 for it
+// with "the worker has not reached it, and it will run", a sentence #42 wrote to stop an operator
+// resuming a crowd twice and a trap for a row the queue refused. `POST /api/exports/{id}?action=retry`
+// answered 400 "Can only retry failed exports" for the export the outage left behind.
+//
+// The queue refuses in two voices, and only one of them rejects. A Redis that dies under a
+// running process rejects in about a tenth of a second with "Stream isn't writeable and
+// enableOfflineQueue options is false" — printed from inside a door's own `catch`, because no
+// classifier saw it either. A process that *starts* while Redis is already gone does not reject at
+// all: `queue.add` waits for a `ready` connection that never arrives, and the door was measured
+// hung past three minutes, having produced no response bytes at any code. #50 teaches the
+// classifier the first sentence and bounds the second with a 3 s hand-off deadline, and it writes
+// the refusal onto the row it refused — `FAILED`, `completedAt` now, `error` starting
+// `never queued:` — before the answer goes out, so `?action=retry` finds an ordinary retry instead
+// of a 409 that promises a run that will never happen.
+//
+// What a demo may reproduce here is the second voice: boot a throwaway instance of the app against
+// a port nothing listens on. The first voice is not reproduced, because stopping it would mean
+// killing a Redis this machine shares with other processes; it is pinned offline instead, in
+// `tests/unit/queue-refusal.test.ts`, against the sentence the diagnostic printed.
+const q27 = (sql) => psql18(sql, true)?.trim();
+const dbOk27 = q27("SELECT 1") === "1";
+const APP_DIR27 = process.env.APP_DIR ?? "";
+const net27 = (await import("node:net")).default;
+const portFree27 = (port) => new Promise((resolve) => {
+  const probe = net27.connect({ port, host: "127.0.0.1" });
+  probe.setTimeout(1200);
+  probe.on("connect", () => { probe.destroy(); resolve(false); });
+  probe.on("timeout", () => { probe.destroy(); resolve(true); });
+  probe.on("error", () => resolve(true));
+});
+const pickFree27 = async (candidates) => {
+  for (const port of candidates) if (await portFree27(port)) return port;
+  return null;
+};
+const healthyPort27 = Number(new URL(APP_BASE).port || 80);
+const downPort27 = await pickFree27([healthyPort27 + 130, ...Array.from({ length: 30 }, (_, i) => 3411 + i)]);
+const deadRedisPort27 = await pickFree27([6399, 6398, 6397, 6396, 6395]);
+
+if (!dbOk27) {
+  log("  psql is unreachable here, so this step cannot read back the rows it is about to refuse, and is skipped rather than passed.");
+} else if (APP_DIR27 === "" || !existsSync(`${APP_DIR27}/.next`) || downPort27 === null || deadRedisPort27 === null) {
+  log(`  this run was not given a second instance to break (APP_DIR=${APP_DIR27 || "unset"}, free port for it=${downPort27 ?? "none"}, a port with nothing listening on it=${deadRedisPort27 ?? "none"}),`);
+  log("  so the outage is not reproduced here rather than claimed. What is shown instead is the control the outage is measured against:");
+  const control27 = await jobPost("ENRICH", { providers: ["derive"], fields: [], confidenceThreshold: 0.5, leadIds: ids.slice(0, 1) });
+  const controlDone27 = await waitJob(control27.id);
+  check(["COMPLETED"].includes(controlDone27.status),
+    `with the queue reachable, the same door hands the row over and the worker runs it: ${control27.id.slice(-6)} → ${controlDone27.status}`);
+  const controlRow27 = q27(`SELECT status||'~'||coalesce(left(error,13),'(no error)') FROM "Job" WHERE id='${control27.id}'`);
+  log(`    the row reads ${controlRow27} — a refused row reads FAILED~never queued: instead, and that is the half this run cannot press`);
+  log("  pinned offline on the branch instead: tests/unit/queue-refusal.test.ts, 32 checks over both measured shapes.");
+  await psql18(`DELETE FROM "Job" WHERE id='${control27.id}'`, false);
+} else {
+  const { openSync } = await import("node:fs");
+  const DOWN_BASE = `http://127.0.0.1:${downPort27}`;
+  const downLog27 = new URL("./.run-leadworks-queue-down.log", import.meta.url).pathname;
+  const TAG27 = `queue44-${RUN}`;
+  const mine27 = [];
+
+  // One lead and one rule that reaches only it, so every count below belongs to this step.
+  const lead27 = await (await fetch(`${API}/leads`, {
+    method: "POST", headers: H,
+    body: JSON.stringify({ firstName: "Refused", lastName: "Row", email: `refused.${RUN}@queue-refused.test`, company: "Queue Estates", title: "Managing Director", seniority: "C_LEVEL", tags: [TAG27] }),
+  })).json();
+  const rule27 = await (await fetch(`${API}/enrichment-rules`, {
+    method: "POST", headers: H,
+    body: JSON.stringify({ name: TAG27, trigger: "MANUAL", conditions: { tags: [TAG27] }, actions: { fields: ["seniority"] }, providers: ["derive"] }),
+  })).json();
+  check(!!lead27.id && rule27.id !== undefined, `the step owns one lead${lead27.id ? ` (${lead27.id.slice(-6)})` : ""} and one rule that reaches only it${rule27.id ? ` (${String(rule27.id).slice(-6)})` : ` — the door said ${JSON.stringify(rule27).slice(0, 90)}`}`);
+
+  // A row this workspace has finished, to be the thing the dead instance is asked to retry.
+  const control27 = await jobPost("ENRICH", { providers: ["derive"], fields: [], confidenceThreshold: 0.5, leadIds: [lead27.id] });
+  mine27.push(control27.id);
+  const controlDone27 = await waitJob(control27.id);
+  check(controlDone27.status === "COMPLETED", `the control: with Redis up the same door enqueues and the worker runs (${control27.id.slice(-6)} → ${controlDone27.status})`);
+
+  // The throwaway. Same database as the instance above — that is the point: a row one process
+  // refused is a row the other can resume — and a `REDIS_URL` pointing at a port this demo
+  // confirmed, above, that nothing is listening on. Nobody's queue is stopped for this.
+  const fd27 = openSync(downLog27, "w");
+  log(`  booting a second instance of the app on :${downPort27} with REDIS_URL=redis://127.0.0.1:${deadRedisPort27} (nothing listens there; log ${downLog27})`);
+  const child27 = spawn("npm", ["run", "start"], {
+    cwd: APP_DIR27,
+    env: { ...process.env, DATABASE_URL: dbUrl18, REDIS_URL: `redis://127.0.0.1:${deadRedisPort27}`, PORT: String(downPort27), NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", ABET_ALLOW_PRIVATE_TARGETS: "1" },
+    stdio: ["ignore", fd27, fd27],
+    detached: true,
+  });
+  let boot27 = null;
+  for (let i = 0; i < 90 && boot27 === null; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      const res = await fetch(`${DOWN_BASE}/api/health`, { signal: AbortSignal.timeout(1500) });
+      boot27 = { http: res.status, body: await res.json() };
+    } catch { /* not listening yet */ }
+  }
+
+  let refused27 = [];
+  try {
+    if (boot27 === null) {
+      check(false, "the queue-less instance never answered GET /api/health within 45s — before #50 a boot like this hung; the tail of its log: " + (() => { try { return readFileSync(downLog27, "utf8").split("\n").slice(-4).join(" / "); } catch { return "(unreadable)"; } })());
+    } else {
+      log(`  it booted: GET /api/health -> ${boot27.http} ${JSON.stringify(boot27.body).slice(0, 220)}`);
+      // The door answers before the boot's own registration deadline lands: the sweep line is
+      // written `SWEEP_REGISTER_TIMEOUT_MS` (5s) after the process starts, so the log is waited
+      // for rather than read once.
+      let bootLog27 = "";
+      let sweepLine27 = null;
+      for (let i = 0; i < 40 && sweepLine27 === null; i++) {
+        bootLog27 = (() => { try { return readFileSync(downLog27, "utf8"); } catch { return ""; } })();
+        sweepLine27 = bootLog27.split("\n").find((l) => /sweep/.test(l)) ?? null;
+        if (sweepLine27 === null) await new Promise((r) => setTimeout(r, 500));
+      }
+      log(`    and it said out loud what it could not register:\n    ${(sweepLine27 ?? "(no sweep line in 20s of log)").slice(0, 200)}`);
+      check(/did not complete|NOT registered/.test(sweepLine27 ?? ""),
+        "the boot finished anyway, naming the sweep it could not add — a hung boot is the shape this round replaced");
+
+      const pressDown27 = async (label, path, init) => {
+        const t0 = Date.now();
+        let res, text = "";
+        try {
+          res = await fetch(`${DOWN_BASE}${path}`, { ...init, headers: H, signal: AbortSignal.timeout(20_000) });
+          text = await res.text();
+        } catch (error) {
+          log(`  ${label} -> NO ANSWER (${String(error).slice(0, 60)})`);
+          return { label, status: 0, bytes: 0, ms: Date.now() - t0, jobId: null, error: String(error) };
+        }
+        let json = {};
+        try { json = JSON.parse(text); } catch { json = { raw: text }; }
+        const out = { label, status: res.status, bytes: text.length, ms: Date.now() - t0, ...json };
+        log(`  ${label} -> ${out.status} (${text.length} B, ${(out.ms / 1000).toFixed(2)}s) ${text.slice(0, 130)}`);
+        return out;
+      };
+
+      const presses27 = [
+        await pressDown27("POST /api/jobs (ENRICH)", "/api/jobs", { method: "POST", body: JSON.stringify({ type: "ENRICH", config: { providers: ["derive"], fields: [], confidenceThreshold: 0.5, leadIds: [lead27.id] } }) }),
+        await pressDown27("POST /api/exports", "/api/exports", { method: "POST", body: JSON.stringify({ format: "csv", fields: ["email", "company"], filterJson: { status: "NEW" } }) }),
+        await pressDown27("POST /api/leads/{id}?action=enrich", `/api/leads/${lead27.id}?action=enrich`, { method: "POST", body: "{}" }),
+        await pressDown27("POST /api/enrichment-rules/{id}?action=run", `/api/enrichment-rules/${rule27.id}?action=run`, { method: "POST", body: "{}" }),
+        await pressDown27(`POST /api/jobs/{completed id}?action=retry`, `/api/jobs/${control27.id}?action=retry`, { method: "POST", body: "{}" }),
+      ];
+      refused27 = presses27.filter((p) => p.jobId);
+      mine27.push(...refused27.map((p) => p.jobId));
+
+      for (const p of presses27) {
+        check(p.status === 503, `${p.label}: answered the service's own 503, not the 500 the unclassified rejection produced`);
+        check(p.bytes > 0, `${p.label}: the body is ${p.bytes} bytes — the outage used to answer 0 bytes and no sentence at all`);
+        check(p.ms < 8000, `${p.label}: answered in ${(p.ms / 1000).toFixed(2)}s — the hand-off is bounded, and this is the door that used to hang past three minutes`);
+        check(/never queued/.test(String(p.error)), `${p.label}: the sentence names the state the row is in, not a retry that would 409`);
+      }
+      check(refused27.length === 5, `all five refusals named the row they left behind (${refused27.length}/5 carried a jobId)`);
+
+      // The row, read out of the table rather than out of the answer.
+      for (const p of refused27) {
+        const row27 = q27(`SELECT status||'~'||coalesce(left(error,13),'(no error)')||'~completedAt='||("completedAt" IS NOT NULL)::text FROM "Job" WHERE id='${p.jobId}'`);
+        log(`    ${p.jobId.slice(-8)}: ${row27}`);
+        check(row27 === `FAILED~never queued:~completedAt=true`, `${p.label}: the row it left says FAILED, never queued and finished — not the PENDING no door will resume`);
+      }
+      const pending27 = q27(`SELECT count(*) FROM "Job" WHERE id IN ('${mine27.join("','")}') AND status='PENDING'`);
+      check(pending27 === "0", `no row this step refused is left at PENDING (${pending27} of ${mine27.length} rows are)`);
+
+      const exportJobId27 = refused27[1]?.jobId ?? "no-row";
+      const exportRow27 = q27(`SELECT status||'~'||coalesce(left(error,13),'(no error)') FROM "Export" WHERE "jobId"='${exportJobId27}'`);
+      log(`    the export minted beside that job: ${exportRow27}`);
+      check(exportRow27 === "FAILED~never queued:", "and the export moved with it, so the export's own retry door has something to retry");
+
+      const readBack27 = await (await fetch(`${DOWN_BASE}/api/jobs/${refused27[0]?.jobId ?? "no-row"}`, { headers: H })).json();
+      log(`    the same row through the read door: status=${readBack27.status} error=${String(readBack27.error).slice(0, 80)}`);
+      check(readBack27.status === "FAILED" && /never queued/.test(String(readBack27.error)), "the refusal is what the application reports, not only what it stored");
+
+      // Recovery, through the instance that does have a queue. A row whose refusal is written
+      // down is an ordinary retry: the door #42 guards is the door that now works.
+      const resumed27 = [];
+      for (const p of refused27) {
+        const res = await fetch(`${API}/jobs/${p.jobId}?action=retry`, { method: "POST", headers: H, body: "{}" });
+        const text = await res.text();
+        let json = {};
+        try { json = JSON.parse(text); } catch { /* keep the text */ }
+        log(`  POST /api/jobs/${p.jobId.slice(-6)}?action=retry on the healthy instance -> ${res.status} ${text.slice(0, 110)}`);
+        check(res.status === 200 || res.status === 201, `${p.label}: the refused row's own id is retryable once the queue is back — the 409 that says "it will run" is gone, because the row no longer claims to be waiting`);
+        if (json.jobId) resumed27.push({ label: p.label, id: json.jobId });
+      }
+      check(resumed27.length === refused27.length, `every retry answered with the new job it started (${resumed27.length}/${refused27.length})`);
+
+      for (const r of resumed27) {
+        mine27.push(r.id);
+        const done27 = await waitJob(r.id);
+        const visits27 = (done27.processedItems ?? 0) + (done27.failedItems ?? 0);
+        log(`  ${r.id.slice(-8)} (${r.label}) -> ${done27.status}, ${visits27} row(s) accounted for, error=${String(done27.error ?? "(none)").slice(0, 40)}`);
+        check(done27.status === "COMPLETED", `${r.label}: the work the outage refused actually ran this time`);
+        if (r.label.startsWith("POST /api/exports")) {
+          // Resumed through the *job's* door, which does not move `Export.jobId` — the export's
+          // own retry door does. So the export is found by the job this step refused.
+          const exportState27 = q27(`SELECT status||'~file='||coalesce("filePath",'(none)') FROM "Export" WHERE "jobId"='${exportJobId27}'`);
+          log(`      the export half of it: ${String(exportState27).slice(0, 120)} (the column can name bytes #36's sweep has already reclaimed — the lifetime is a minute in this demo's boot)`);
+          check(String(exportState27).startsWith("COMPLETED"), "and the export row finished, which is the state its retry door reads");
+        } else {
+          check(visits27 === 1, `${r.label}: one lead was visited, and the report accounts for the one row it names`);
+        }
+      }
+
+      log("  what this step does not claim:");
+      log("    · the mid-run voice of the refusal — Redis dying under a process that had it — is not shown here, because stopping it would mean stopping a queue this machine shares. It is pinned offline.");
+      log("    · the queue-less instance's own workers do not come back by retrying: measured on #50's runtime, rows handed off after its Redis returned reached `bull:enrich:wait` with `active` at 0. The retries above ran on the instance that always had a queue.");
+      log("    · GET /api/health can keep saying `redis unreachable` after the queue is reachable again (#50 measured 20s of it). Its line above is honest, but it is not a readiness signal.");
+    }
+  } finally {
+    // The exact process group this step started, and nothing else.
+    try { process.kill(-child27.pid, "SIGTERM"); } catch { /* already gone */ }
+    await new Promise((r) => setTimeout(r, 2500));
+    try { process.kill(-child27.pid, "SIGKILL"); } catch { /* already gone */ }
+    const still27 = await portFree27(downPort27);
+    log(`  the throwaway instance is stopped (port :${downPort27} ${still27 ? "is free again" : "still answers — see the log above"})`);
+    check(still27, "nothing this step started is left listening");
+
+    const exportId27 = q27(`SELECT id FROM "Export" WHERE "jobId"='${refused27?.[1]?.jobId ?? ""}'`);
+    if (exportId27) await fetch(`${API}/exports/${exportId27}`, { method: "DELETE", headers: H });
+    await fetch(`${API}/enrichment-rules/${rule27.id}`, { method: "DELETE", headers: H });
+    await fetch(`${API}/leads/${lead27.id}`, { method: "DELETE", headers: H });
+    await psql18(`DELETE FROM "Job" WHERE id IN ('${mine27.join("','")}')`, false);
+    const left27 = q27(`SELECT count(*) FROM "Job" WHERE id IN ('${mine27.join("','")}')`);
+    const leadsLeft27 = q27(`SELECT count(*) FROM "Lead" WHERE tags @> '["${TAG27}"]'::jsonb`);
+    log(`  cleanup: ${mine27.length} jobs, one export, one rule and one lead deleted (${left27} job rows and ${leadsLeft27} leads of this step's are left)`);
+    check(left27 === "0" && leadsLeft27 === "0", "the workspace is back to where the step found it");
   }
 }
 

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AbetAPI",
-    "version": "1.2.0",
+    "version": "1.4.1",
     "description": "Keys, webhooks, usage and SSO connections. Auth is a workspace key in `Authorization: Bearer ab_live_…` or `x-api-key`; only its hash is stored."
   },
   "servers": [
@@ -629,15 +629,7 @@
       "post": {
         "operationId": "receiveNucrmEvent",
         "summary": "Receive a signed NuCRM webhook and publish it to matching subscriptions",
-        "description": "This is the address a NuCRM integration webhook posts to — the receiving end of the bridge, where `POST /api/v1/events` is the publishing end your own code calls. Create a source in the dashboard (Connect NuCRM), then configure the NuCRM integration with this URL, `Authorization: Bearer <key>` plus the integration's secret. The body is NuCRM's envelope; `x-nucrm-signature` is `sha256=` + HMAC-SHA256 of the exact bytes, keyed by the source's secret (the `sha256=` prefix is optional and both spellings verify). `x-nucrm-delivery` deduplicates NuCRM's own retries: a repeat answers `200` with `duplicate: true` and publishes nothing. An accepted event gets one Delivery per matching subscription, counted like `POST /api/v1/events`; a paused source answers 409 and NuCRM parks the delivery after its five attempts.",
-        "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "apiKeyHeader": []
-          }
-        ],
+        "description": "This is the address a NuCRM integration webhook posts to — the receiving end of the bridge, where `POST /api/v1/events` is the publishing end your own code calls. Create a source in the dashboard (Connect NuCRM) and paste its URL and secret into the integration; nothing else is needed. The body is NuCRM's envelope; `x-nucrm-signature` (or `x-webhook-signature`, same construction) is `sha256=` + HMAC-SHA256 of the exact bytes, keyed by the source's secret (the `sha256=` prefix is optional and both spellings verify). The signature is the authentication — NuCRM's integration config has no custom-header field, so it can never send an API key. A `Bearer` key with `events:write` is accepted when a forwarder relays on NuCRM's behalf; when one is sent it must authenticate, and the source must live in its workspace. `x-nucrm-delivery` (or `x-webhook-delivery`) deduplicates NuCRM's own retries: a repeat answers `200` with `duplicate: true` and publishes nothing. An accepted event gets one Delivery per matching subscription, counted like `POST /api/v1/events`; a paused source answers 409 and NuCRM parks the delivery after its five attempts.",
         "parameters": [
           {
             "name": "id",
@@ -651,7 +643,7 @@
           {
             "name": "x-nucrm-signature",
             "in": "header",
-            "description": "HMAC-SHA256 of the request body, hex, optionally prefixed `sha256=`.",
+            "description": "HMAC-SHA256 of the request body, hex, optionally prefixed `sha256=`. `x-webhook-signature` verifies the same way.",
             "required": true,
             "schema": {
               "type": "string"
@@ -660,7 +652,16 @@
           {
             "name": "x-nucrm-delivery",
             "in": "header",
-            "description": "NuCRM's delivery id. A repeat of one already accepted answers 200 with `duplicate: true`.",
+            "description": "NuCRM's delivery id. A repeat of one already accepted answers 200 with `duplicate: true`. `x-webhook-delivery` is read too.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "description": "`Bearer <key>` with `events:write`, optional. When sent, the key must be valid and the source must belong to its workspace.",
             "required": false,
             "schema": {
               "type": "string"
@@ -740,7 +741,7 @@
             }
           },
           "401": {
-            "description": "No key, or x-nucrm-signature missing/does not match the source's secret",
+            "description": "x-nucrm-signature missing or wrong for the source's secret; or a Bearer key was sent and did not authenticate",
             "content": {
               "application/json": {
                 "schema": {
@@ -750,7 +751,7 @@
             }
           },
           "403": {
-            "description": "Needs events:write",
+            "description": "A Bearer key was sent but lacks events:write",
             "content": {
               "application/json": {
                 "schema": {
@@ -760,7 +761,7 @@
             }
           },
           "404": {
-            "description": "No such inbound source in this workspace",
+            "description": "No such inbound source (with a key: none in that workspace)",
             "content": {
               "application/json": {
                 "schema": {

@@ -303,13 +303,21 @@ vars, re-run the smoke sweep — then the suite is sellable.
   a request ever arriving.
 - **Freshness:** NuCRM's plugin receiver enforces a 5-minute window when
   `x-webhook-timestamp` is sent (numeric seconds or ms) and skips the check
-  when absent. All fleet senders now include it, so point-in-time replays
-  die at NuCRM's door.
+  when absent, so every fleet sender now sends it and a stale re-send is
+  refused at the door. It is freshness, not replay protection: the value is
+  outside the bytes the suite signs, so whoever captured a delivery could
+  stamp a fresh one. The delivery id is the part that cannot be forged.
 - **Rate limits:** NuCRM's plugin receiver caps 60 req/min per plugin id
   (429, no `Retry-After`). NuCRM's own deliveries time out after 10 s and
   retry five times (5m/30m/2h/12h/24h) before its dead-letter queue —
   retries replay the original signature over re-serialized JSONB bytes, so
   receivers must dedupe on `x-nucrm-delivery`, not on re-verification.
+- **Delivery ids:** every fleet sender also sends `x-webhook-delivery`, carrying
+  the `id` from inside the signed body. NuCRM's plugin receiver does not dedupe
+  on it today — it logs each POST it accepts and republishes — so the header
+  serves a receiver that does dedupe, including this suite's own inbound
+  endpoint, which reads `x-nucrm-delivery`/`x-webhook-delivery` and answers
+  `200 { duplicate: true }` to a repeat.
 - **Auth when the fleet calls NuCRM:** `Authorization: Bearer <apiKey>`;
   single-entity routes answer `{ "data": … }`, list routes
   `{ data, total, offset, limit }`.
